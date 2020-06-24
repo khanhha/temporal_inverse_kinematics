@@ -432,7 +432,7 @@ def add_empties_if_not_exist(points, collection):
         ob.location = Vector(p)
 
 
-def generate_random_cameras(cam_obj, frm_joints, ncam, head_idx, lfoot_idx, rfoot_idx):
+def generate_random_cameras(cam_obj, frm_joints, ncam, head_idx, lfoot_idx, rfoot_idx, focal_length):
     head = frm_joints[:, head_idx, :]
     foot = 0.5 * (frm_joints[:, lfoot_idx, :] + frm_joints[:, rfoot_idx, :])
     h = np.mean(np.linalg.norm(head - foot, axis=1).flatten())
@@ -448,7 +448,6 @@ def generate_random_cameras(cam_obj, frm_joints, ncam, head_idx, lfoot_idx, rfoo
     radius_noise = 0.5*h
     scn = bpy.context.scene
 
-    focal_len_range = [40, 60]
     rand_cams = []
     for i in range(ncam):
         angle = np.random.rand() * np.pi * 2
@@ -464,7 +463,7 @@ def generate_random_cameras(cam_obj, frm_joints, ncam, head_idx, lfoot_idx, rfoo
         min_dst, n_tried = find_optimal_dst_focal_length(cam_obj, bb_pnts,
                                                          min_dst_search=h, dst_step=dst_step,
                                                          cam_look_at_pos=cam_look_at, to_camera_dir=to_camera_dir,
-                                                         focal_len=focal_len_range[1],
+                                                         focal_len=focal_length,
                                                          n_max_tries=300)
         if min_dst is None:
             min_dst = 8 * h
@@ -480,8 +479,7 @@ def generate_random_cameras(cam_obj, frm_joints, ncam, head_idx, lfoot_idx, rfoo
 
         # randomly increase the foca length
         # rand_focal_length = focal_len_range[1]
-        rand_focal_length = random.randint(focal_len_range[0], focal_len_range[1])
-        bpy.data.cameras[cam_obj.name].lens = rand_focal_length
+        bpy.data.cameras[cam_obj.name].lens = focal_length
 
         cam_loc = cam_look_at + to_camera_dir * cam_dst
         cam_obj.location = Vector(cam_loc.tolist())
@@ -498,7 +496,11 @@ def generate_random_cameras(cam_obj, frm_joints, ncam, head_idx, lfoot_idx, rfoo
 
         w = scn.render.resolution_x
         h = scn.render.resolution_y
-        rand_cams.append({"K": K, "RT": RT, "P": P, "res_w": w, "res_h": h})
+        rand_cams.append({"K": K, "RT": RT, "P": P,
+                          "res_w": w, "res_h": h,
+                          "cam_dst": cam_dst,
+                          "angle": angle,
+                          "f": focal_length})
 
     return rand_cams
 
@@ -932,9 +934,11 @@ def gen_single_anim_cams(cam_ob, anim_name, data, frm_joints, fps,
     mocap_framerate = data["mocap_framerate"]
     cams = []
     bld_cams = []
+    focal_len_range = [40, 60]
+    rand_focal_length = random.randint(focal_len_range[0], focal_len_range[1])
     for cam_idx in range(n_cams):
         cam_data = generate_random_cameras(cam_ob, frm_joints, 1,
-                                           head_idx, lfoot_idx, rfoot_idx)[0]
+                                           head_idx, lfoot_idx, rfoot_idx, focal_length=rand_focal_length)[0]
         bld_cams.append(get_bld_cam_data(cam_ob))
         cams.append(cam_data)
 
