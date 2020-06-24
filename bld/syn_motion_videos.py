@@ -5,6 +5,7 @@ import argparse
 import csv
 import bpy
 import numpy as np
+import logging
 from os import getenv
 from os import remove
 from bpy.props import StringProperty, BoolProperty, IntProperty, FloatProperty, EnumProperty, FloatVectorProperty
@@ -302,7 +303,7 @@ def create_smpl_mesh(faces, verts, name, col_name):
 
 def shift_animation_onto_ground(frm_meshes, frm_joints):
     z_min = np.min(frm_meshes[:, :, 2].flatten())
-    print(f'\tmin z ground level = {z_min}')
+    logging.info(f'\tmin z ground level = {z_min}')
     frm_meshes[:, :, 2] -= z_min
     frm_joints[:, :, 2] -= z_min
     return frm_meshes, frm_joints
@@ -444,7 +445,7 @@ def generate_random_cameras(cam_obj, frm_joints, ncam, head_idx, lfoot_idx, rfoo
         c = bpy.data.collections["bb_debug"]
         add_empties_if_not_exist(bb_pnts.tolist(), c)
 
-    radius_noise = h
+    radius_noise = 0.5*h
     scn = bpy.context.scene
 
     focal_len_range = [40, 60]
@@ -461,21 +462,20 @@ def generate_random_cameras(cam_obj, frm_joints, ncam, head_idx, lfoot_idx, rfoo
         # find the minimum distance to the camera that the whole projected animation is still inside the input image.
         dst_step = 0.1
         min_dst, n_tried = find_optimal_dst_focal_length(cam_obj, bb_pnts,
-                                                         min_dst_search=2.5 * h, dst_step=dst_step,
+                                                         min_dst_search=h, dst_step=dst_step,
                                                          cam_look_at_pos=cam_look_at, to_camera_dir=to_camera_dir,
                                                          focal_len=focal_len_range[1],
                                                          n_max_tries=300)
         if min_dst is None:
             min_dst = 8 * h
-            print('cannot find minimum distance which makes the whole animation in screen. resort to :', min_dst)
+            logging.error('cannot find minimum distance which makes the whole animation in screen. resort to :', min_dst)
         else:
             # add some distance margin
-            min_dst += dst_step
+            min_dst += 0.1*h
 
-        print(f'\tcammera {i}. disance to camera: {min_dst}. n_tried = {n_tried}', )
+        logging.info(f'\tcammera {i}. disance to camera: {min_dst}. n_tried = {n_tried}', )
 
         # randomly increase the camera distance
-        # cam_dst = min_dst
         cam_dst = min_dst + np.random.rand() * radius_noise
 
         # randomly increase the foca length
@@ -483,7 +483,7 @@ def generate_random_cameras(cam_obj, frm_joints, ncam, head_idx, lfoot_idx, rfoo
         rand_focal_length = random.randint(focal_len_range[0], focal_len_range[1])
         bpy.data.cameras[cam_obj.name].lens = rand_focal_length
 
-        cam_loc = mid_point + to_camera_dir * cam_dst
+        cam_loc = cam_look_at + to_camera_dir * cam_dst
         cam_obj.location = Vector(cam_loc.tolist())
 
         look_at(cam_obj, Vector(cam_look_at.tolist()))
@@ -625,7 +625,7 @@ def render_animation_cam(ob, frm_meshes, frm_joints, out_vid_dir):
         frm_cnt += 1
 
         render_time = time.time() - s_t
-        print(f' load mesh time: {load_mesh_time}. render time: {render_time}')
+        logging.info(f' load mesh time: {load_mesh_time}. render time: {render_time}')
 
 
 def disable_blender_log(logfile='./blender_render.log'):
@@ -939,7 +939,7 @@ def gen_single_anim_cams(cam_ob, anim_name, data, frm_joints, fps,
         cams.append(cam_data)
 
     out_data_path = f'{out_data_dir}/{anim_name}.npz'
-    print(f'\toutput data file: {out_data_path}')
+    logging.info(f'\toutput data file: {out_data_path}')
     np.savez_compressed(out_data_path,
                         camera=cams,
                         bld_cameras=bld_cams,
@@ -1067,7 +1067,7 @@ def collect_all_shape_params(amass_dir):
         if path.parent not in subject_marks:
             subject_paths.append(path)
             subject_marks.add(path.parent)
-    print(f'amass: total subject = {len(subject_paths)}')
+    logging.info(f'amass: total subject = {len(subject_paths)}')
     shapes = []
     for path in subject_paths:
         data = np.load(str(path))
@@ -1080,23 +1080,30 @@ def collect_all_shape_params(amass_dir):
 def render_single_anim_cam(cam_ob, ob, anim_name, data, frm_meshes, frm_joints,
                            cameras, env_tex_paths, cloth_tex_paths, out_vid_dir):
     total_render_time = 0
+
+    env_file = env_tex_paths[np.random.randint(0, len(env_tex_paths))]
+    load_hdri_env(env_file, bpy.context)
+
+    cloth_file = cloth_tex_paths[np.random.randint(0, len(cloth_tex_paths))]
+    replace_avatar_cloth_texture(ob, cloth_file)
+
     for cam_idx, cam_data in enumerate(cameras):
         t = time.time()
 
         set_bld_cam_data(cam_ob, cam_data)
 
-        env_file = env_tex_paths[np.random.randint(0, len(env_tex_paths))]
-        load_hdri_env(env_file, bpy.context)
-
-        cloth_file = cloth_tex_paths[np.random.randint(0, len(cloth_tex_paths))]
-        replace_avatar_cloth_texture(ob, cloth_file)
+        # env_file = env_tex_paths[np.random.randint(0, len(env_tex_paths))]
+        # load_hdri_env(env_file, bpy.context)
+        #
+        # cloth_file = cloth_tex_paths[np.random.randint(0, len(cloth_tex_paths))]
+        # replace_avatar_cloth_texture(ob, cloth_file)
 
         video_name = f'{anim_name}_cam-{cam_idx}.mp4'
         out_video_path = f'{out_vid_dir}/{video_name}'
         fps = data["framerate"]
         with tempfile.TemporaryDirectory() as tmp_img_dir:
             # tmp_img_dir = f'/media/F/projects/moveai/codes/run_data/amass/debug/'
-            print(f'\trendering {video_name}')
+            logging.info(f'\trendering {video_name}')
             log_file = disable_blender_log()
             render_animation_cam(ob, frm_meshes, frm_joints,
                                  out_vid_dir=tmp_img_dir)
@@ -1104,10 +1111,10 @@ def render_single_anim_cam(cam_ob, ob, anim_name, data, frm_meshes, frm_joints,
             # use ffmpeg to convert rendered images to video
             imgs_to_video(tmp_img_dir, out_video_path, fps)
             render_time = time.time() - t
-            print(f'\trender time = {render_time / 60} minutes.  output video file: {out_video_path}')
+            logging.info(f'\trender time = {render_time / 60} minutes.  output video file: {out_video_path}')
             total_render_time += render_time
 
-    print(f'\ttotal render time = {total_render_time / 60} minutes.')
+    logging.info(f'\ttotal render time = {total_render_time / 60} minutes.')
 
 
 def render_multi_anims_cams_videos(smpl_bld_ob, bld_cam_ob, texture_dir, smplx_dir, amass_dir,
@@ -1121,7 +1128,7 @@ def render_multi_anims_cams_videos(smpl_bld_ob, bld_cam_ob, texture_dir, smplx_d
     for data_path in data_paths:
         t = time.time()
         anim_name = data_path.stem
-        print(f'animation: {anim_name}')
+        logging.info(f'animation: {anim_name}')
 
         data = np.load(str(data_path), allow_pickle=True)
         data = {key: data[key] for key in data.keys()}
@@ -1131,7 +1138,7 @@ def render_multi_anims_cams_videos(smpl_bld_ob, bld_cam_ob, texture_dir, smplx_d
         frm_meshes, frm_joints = run_smpl_inference(data, smplx_models, device)
         mesh_time = time.time() - t
 
-        print(f'\tmesh generation time: {mesh_time}. '
+        logging.info(f'\tmesh generation time: {mesh_time}. '
               f'data shape: {frm_meshes.shape}. {frm_joints.shape} '
               f'n_frames = {frm_joints.shape[0]}. '
               f'fps = {framrate}')
@@ -1164,7 +1171,7 @@ def gen_multi_anims_cams(bld_cam_ob, smplx_dir, amass_dir, shape_db,
     for data_path in data_paths:
         t = time.time()
         anim_name = data_path.stem
-        print(f'animation: {anim_name}')
+        logging.info(f'animation: {anim_name}')
 
         data = np.load(str(data_path))
         data = {key: data[key] for key in data.keys()}
@@ -1185,7 +1192,7 @@ def gen_multi_anims_cams(bld_cam_ob, smplx_dir, amass_dir, shape_db,
         frm_meshes, frm_joints = run_smpl_inference(data, smplx_models, device)
         mesh_time = time.time() - t
 
-        print(f'\tmesh generation time: {mesh_time}. '
+        logging.info(f'\tmesh generation time: {mesh_time}. '
               f'data shape: {frm_meshes.shape}. {frm_joints.shape} '
               f'n_org_frames = {n_org_frames}. '
               f'n_process_frames = {frm_joints.shape[0]}. '
@@ -1220,6 +1227,7 @@ def parse_args():
     parser.add_argument('--gen_video', action='store_true', help='gen video from multiview data', )
     parser.add_argument('--max_anim_frame', type=int, default=1000,
                         help='max frame number that no animation should exist. -1 for unlimited')
+    parser.add_argument('--log', type=str, default="./my_log.txt")
 
     args = parser.parse_args(sys.argv[sys.argv.index("--") + 1:])
     return args
@@ -1243,7 +1251,8 @@ def run_from_args():
     smpl_bld_ob = bpy.data.objects["smpl_v1"]
     device = args.device
 
-    print('\narguments: ', args, '\n')
+    logging.basicConfig(filename=args.log, level=logging.DEBUG)
+    logging.info('\narguments: args \n')
 
     # shapes = collect_all_shape_params(args.amass)
     # out_path = f'/media/F/projects/moveai/codes/run_data/amass/smplx_shapes.npz'
@@ -1251,17 +1260,14 @@ def run_from_args():
     if args.gen_data:
         smplx_shapes = np.load(args.shape_file, allow_pickle=True)["shapes"] if args.shape_file else None
         if smplx_shapes is not None:
-            print(f'load {len(smplx_shapes)} smplx shape params from the file {len(smplx_shapes)}')
+            logging.info(f'load {len(smplx_shapes)} smplx shape params from the file {len(smplx_shapes)}')
         else:
-            print('no usage of randam shape. using default shapes from the amass amin_ds')
+            logging.info('no usage of randam shape. using default shapes from the amass amin_ds')
 
         amass_dir = args.amass
-        print('\n\ngenerating multi-view animation data')
+        logging.info('\n\ngenerating multi-view animation data')
         amass_files = load_file_list_from_csv(args.amass_csv, amass_dir)
-        print(f' {len(amass_files)} amass npz files will be processed\n')
-
-        # debug
-        amass_files = [amass_files[idx] for idx in np.random.randint(0, len(amass_files), 10)]
+        logging.info(f' {len(amass_files)} amass npz files will be processed\n')
 
         out_data_dir = Path(f'{args.out_dir}/data/')
         gen_multi_anims_cams(bld_cam_ob=bld_cam_ob,
@@ -1272,7 +1278,7 @@ def run_from_args():
     if args.gen_video:
         data_dir = f'{args.out_dir}/data'
         amass_files = load_file_list_from_csv(args.amass_csv, data_dir)
-        print('\n\nsynthesizing multi-view videos')
+        logging.info('\n\nsynthesizing multi-view videos')
         out_vid_dir = Path(f'{args.out_dir}/render')
         render_multi_anims_cams_videos(smpl_bld_ob=smpl_bld_ob, bld_cam_ob=bld_cam_ob,
                                        smplx_dir=args.smplx, amass_dir=data_dir, amass_files=amass_files,
