@@ -27,7 +27,7 @@ from pickle import load
 from bpy_extras.object_utils import world_to_camera_view as world2cam
 
 sys.path.append("/media/F/projects/moveai/codes/motion_extraction/addon_bld/")
-from bld_utils import (get_calibration_matrix_K_from_blender, get_3x4_RT_matrix_from_blender,
+from blender_utils import (get_calibration_matrix_K_from_blender, get_3x4_RT_matrix_from_blender,
                        get_3x4_P_matrix_from_blender, look_at)
 
 sorted_parts = ['hips', 'leftUpLeg', 'rightUpLeg', 'spine', 'leftLeg', 'rightLeg',
