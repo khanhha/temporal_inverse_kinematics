@@ -33,10 +33,12 @@ class ST_GCN_18(nn.Module):
             :math:`V_{in}` is the number of graph nodes,
             :math:`M_{in}` is the number of instance in a frame.
     """
+
     def __init__(self,
                  in_channels,
-                 num_class,
                  graph_cfg,
+                 n_out_joints,
+                 n_out_channels,
                  edge_importance_weighting=True,
                  data_bn=True,
                  **kwargs):
@@ -48,6 +50,10 @@ class ST_GCN_18(nn.Module):
                          dtype=torch.float32,
                          requires_grad=False)
         self.register_buffer('A', A)
+
+        self.n_out_joints = n_out_joints
+        self.n_out_channels = n_out_channels
+        self.n_in_keypoints = A.size(1)
 
         # build networks
         spatial_kernel_size = A.size(0)
@@ -66,12 +72,15 @@ class ST_GCN_18(nn.Module):
             st_gcn_block(64, 64, kernel_size, 1, **kwargs),
             st_gcn_block(64, 64, kernel_size, 1, **kwargs),
             st_gcn_block(64, 64, kernel_size, 1, **kwargs),
-            st_gcn_block(64, 128, kernel_size, 2, **kwargs),
+            st_gcn_block(64, 128, kernel_size, 1, **kwargs),
             st_gcn_block(128, 128, kernel_size, 1, **kwargs),
             st_gcn_block(128, 128, kernel_size, 1, **kwargs),
-            st_gcn_block(128, 256, kernel_size, 2, **kwargs),
+            st_gcn_block(128, 256, kernel_size, 1, **kwargs),
             st_gcn_block(256, 256, kernel_size, 1, **kwargs),
             st_gcn_block(256, 256, kernel_size, 1, **kwargs),
+            st_gcn_block(256, 256, kernel_size, 1, **kwargs),
+            st_gcn_block(256, 512, kernel_size, 1, **kwargs),
+            st_gcn_block(512, 512, kernel_size, 1, **kwargs)
         ))
 
         # initialize parameters for edge importance weighting
@@ -83,35 +92,35 @@ class ST_GCN_18(nn.Module):
         else:
             self.edge_importance = [1] * len(self.st_gcn_networks)
 
-        # fcn for prediction
-        self.fcn = nn.Conv2d(256, num_class, kernel_size=1)
+        self.regressor = nn.Conv1d(512 * self.n_in_keypoints,
+                                   self.n_out_channels * self.n_out_joints, kernel_size=1)
 
     def forward(self, x):
+        """
+        :param x: NxTxVxC where N is batch size, T is temporal win size, V is the number of vertex. C is vertex channel
+        :return:
+        """
         # data normalization
-        N, C, T, V, M = x.size()
-        x = x.permute(0, 4, 3, 1, 2).contiguous()
-        x = x.view(N * M, V * C, T)
+        N, T, V, C = x.size()
+        x = x.permute(0, 2, 3, 1).contiguous()
+        x = x.view(N, V * C, T)
         x = self.data_bn(x)
-        x = x.view(N, M, V, C, T)
-        x = x.permute(0, 1, 3, 4, 2).contiguous()
-        x = x.view(N * M, C, T, V)
+        x = x.view(N, V, C, T)
+        x = x.permute(0, 2, 3, 1).contiguous()
+        x = x.view(N, C, T, V)
 
         # forward
         for gcn, importance in zip(self.st_gcn_networks, self.edge_importance):
             x, _ = gcn(x, self.A * importance)
 
-        # global pooling
-        x = F.avg_pool2d(x, x.size()[2:])
-        x = x.view(N, M, -1, 1, 1).mean(dim=1)
-
-        # prediction
-        x = self.fcn(x)
-        x = x.view(x.size(0), -1)
-
+        x = x.transpose(2, 3)
+        x = x.contiguous().view(N, -1, T)
+        x = self.regressor(x)
+        x = x.transpose(1, 2)
+        x = x.view(N, T, self.n_out_joints, self.n_out_channels)
         return x
 
     def extract_feature(self, x):
-
         # data normalization
         N, C, T, V, M = x.size()
         x = x.permute(0, 4, 3, 1, 2).contiguous()
@@ -125,14 +134,17 @@ class ST_GCN_18(nn.Module):
         for gcn, importance in zip(self.st_gcn_networks, self.edge_importance):
             x, _ = gcn(x, self.A * importance)
 
-        _, c, t, v = x.size()
-        feature = x.view(N, M, c, t, v).permute(0, 2, 3, 4, 1)
+        x1 = self.regressor(x)
 
-        # prediction
-        x = self.fcn(x)
-        output = x.view(N, M, -1, t, v).permute(0, 2, 3, 4, 1)
+        # _, c, t, v = x.size()
+        # feature = x.view(N, M, c, t, v).permute(0, 2, 3, 4, 1)
+        #
+        # # prediction
+        # x = self.fcn(x)
+        # output = x.view(N, M, -1, t, v).permute(0, 2, 3, 4, 1)
 
-        return output, feature
+        # return output, feature
+        return x1
 
 
 class st_gcn_block(nn.Module):
@@ -159,6 +171,7 @@ class st_gcn_block(nn.Module):
             :math:`V` is the number of graph nodes.
 
     """
+
     def __init__(self,
                  in_channels,
                  out_channels,
