@@ -147,16 +147,24 @@ class AmassDataset(Dataset):
             os.makedirs(str(self.data_dir), exist_ok=True)
             self.data_paths = self.generate_data()
         else:
-            self.data_paths = self.list_data_paths()
+            self.data_paths = self.list_data_paths(amass_paths)
+        self.data_anims = []
+        for dpath in self.data_paths:
+            d = np.load(str(dpath), allow_pickle=True)
+            d = {k: d[k].item() if d[k].dtype == object else d[k] for k, v in d.items()}
+            self.data_anims.append(d)
+
         self.index_mappings = self.generate_index_file_mapping()
 
     def __len__(self):
         return len(self.index_mappings)
 
     def __getitem__(self, idx):
-        path_idx, offset = self.index_mappings[idx]
+        data_idx, offset = self.index_mappings[idx]
         local_idx = idx - offset
-        data = np.load(str(self.data_paths[path_idx]), allow_pickle=True)
+        # data = np.load(str(self.data_paths[data_idx]), allow_pickle=True)
+        data = self.data_anims[data_idx]
+
         keypoints_3d = sample_window(data["keypoints_3d"], local_idx, self.half_win_size)
         keypoints_3d = convert_smplx(keypoints_3d, self.target_kps_mapping, False)
 
@@ -169,12 +177,11 @@ class AmassDataset(Dataset):
         # plt.show(block=True)
         # fig.clear()
         # plt.clf()
-
         poses = sample_window(data["poses"], local_idx, self.half_win_size)
         betas = data["betas"]
-        return {"keypoints_3d": keypoints_3d,
-                "poses": poses,
-                "betas": betas}
+        return {"keypoints_3d": keypoints_3d.astype(np.float32),
+                "poses": poses[:, :66].astype(np.float32),
+                "betas": betas.astype(np.float32)}
 
     def count_samples(self):
         apaths = sorted([apath for apath in self.data_dir.rglob('*.npz')])
@@ -205,8 +212,9 @@ class AmassDataset(Dataset):
             current_offset = new_offset
         return mappings
 
-    def list_data_paths(self):
-        return sorted([apath for apath in self.data_dir.rglob('*.npz')])
+    def list_data_paths(self, amass_paths):
+        hash_paths = {apath.stem for apath in amass_paths}
+        return sorted([apath for apath in self.data_dir.rglob('*.npz') if apath.stem in hash_paths])
 
     def generate_data(self):
         data_paths = []

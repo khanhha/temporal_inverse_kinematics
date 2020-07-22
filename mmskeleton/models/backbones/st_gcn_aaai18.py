@@ -77,10 +77,6 @@ class ST_GCN_18(nn.Module):
             st_gcn_block(128, 128, kernel_size, 1, **kwargs),
             st_gcn_block(128, 256, kernel_size, 1, **kwargs),
             st_gcn_block(256, 256, kernel_size, 1, **kwargs),
-            st_gcn_block(256, 256, kernel_size, 1, **kwargs),
-            st_gcn_block(256, 256, kernel_size, 1, **kwargs),
-            st_gcn_block(256, 512, kernel_size, 1, **kwargs),
-            st_gcn_block(512, 512, kernel_size, 1, **kwargs)
         ))
 
         # initialize parameters for edge importance weighting
@@ -92,7 +88,7 @@ class ST_GCN_18(nn.Module):
         else:
             self.edge_importance = [1] * len(self.st_gcn_networks)
 
-        self.regressor = nn.Conv1d(512 * self.n_in_keypoints,
+        self.regressor = nn.Conv1d(256 * self.n_in_keypoints,
                                    self.n_out_channels * self.n_out_joints, kernel_size=1)
 
     def forward(self, x):
