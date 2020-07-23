@@ -31,13 +31,13 @@ if __name__ == "__main__":
     data_dir = Path('/media/F/datasets/amass/ik_model')
     cache_dir = Path('/media/F/datasets/amass/tmp_debug')
     model = IKModelWrapper.load_from_checkpoint(str(ckpt_path))
-    val_paths = _load_amass_path_list(Path(data_dir) / 'valid.csv')[:1]
+    val_paths = _load_amass_path_list(Path(data_dir) / 'train.csv')[:1]
     smpl_x_dir = Path(amass_dir) / 'smplx'
     smplx_models = load_smplx_models(smpl_x_dir, 'cpu', 9)
 
     ds = AmassDataset(smplx_dir=smpl_x_dir, amass_paths=val_paths,
                       window_size=model.hparams.win_size, keypoint_format='coco', cache_dir=cache_dir,
-                      reset_cache=False)
+                      reset_cache=True)
 
     n = len(ds)
     in_data = ds[0]

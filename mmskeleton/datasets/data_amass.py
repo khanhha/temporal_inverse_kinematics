@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
@@ -9,63 +9,7 @@ from tqdm import tqdm
 import os
 from smplx.joint_names import JOINT_NAMES as SMPLX_JOINT_NAMES
 from common.draw_util import draw_3d_pose
-
-
-def load_smplx_models(smplx_dir, device, batch_size):
-    male_path = f'{smplx_dir}/SMPLX_MALE.npz'
-    female_path = f'{smplx_dir}/SMPLX_FEMALE.npz'
-    # use_pca: for hand pose parameter. smplx model is kind of a bit different from human_pose_prior. not sure why
-    male_smplx = smplx_create(model_path=male_path, model_type='smplx', gender='male', use_pca=False,
-                              use_face_contour=True, batch_size=batch_size).to(device)
-    female_smplx = smplx_create(model_path=female_path, model_type='smplx', gender='female', use_pca=False,
-                                use_face_contour=True, batch_size=batch_size).to(device)
-    return {'male_smplx': male_smplx, 'female_smplx': female_smplx}
-
-
-def run_smpl_inference(data, smplx_models, device):
-    gender = str(data["gender"])
-    smplx_model = smplx_models["male_smplx"] if 'male' in gender else smplx_models["female_smplx"]
-    batch_size = smplx_model.batch_size
-    frm_poses = data["poses"].astype(np.float32)
-    frm_trans = data["trans"].astype(np.float32)
-    n_poses = frm_poses.shape[0]
-    frm_joints = []
-    n_batch = (n_poses // batch_size) + 1
-    for i in range(n_batch):
-        s = i * batch_size
-        e = (i + 1) * batch_size
-        if s >= n_poses:
-            break
-        poses = frm_poses[s:e, :]
-        trans = frm_trans[s:e, :]
-        org_bsize = poses.shape[0]
-        pad = 0
-        # print(f'n batch = {n_batch}. batch from {s} to {e}. cur_batch_size = {org_bsize}')
-        if org_bsize < batch_size:
-            # padding because smplx_model require fixed batch size
-            pad = batch_size - org_bsize
-            poses = np.concatenate([poses, np.zeros((pad, poses.shape[1]), dtype=np.float32)], axis=0)
-            trans = np.concatenate([trans, np.zeros((pad, trans.shape[1]), dtype=np.float32)], axis=0)
-
-        poses = torch.from_numpy(poses).to(device)
-        trans = torch.from_numpy(trans).to(device)
-        root_orient = poses[:, :3]
-        pose_body = poses[:, 3:66]
-        left_pose_hand = poses[:, 66:66 + 45]
-        right_pose_hand = poses[:, 66 + 45:66 + 90]
-
-        # print(root_orient.shape, pose_body.shape, left_pose_hand.shape, right_pose_hand.shape, trans.shape)
-        body = smplx_model(global_orient=root_orient, body_pose=pose_body,
-                           left_hand_pose=left_pose_hand, right_hand_pose=right_pose_hand,
-                           transl=trans)
-        joints = body.joints.detach().cpu().numpy()
-        if pad > 0:
-            joints = joints[:org_bsize]
-        frm_joints.append(joints)
-
-    frm_joints = np.concatenate(frm_joints, axis=0)
-
-    return frm_joints
+from common.smpl_util import run_smpl_inference
 
 
 def sample_window(arr, idx, h_win_size):
@@ -131,11 +75,12 @@ def convert_smplx(smplx_kps, mappings, do_copy=False):
 
 
 class AmassDataset(Dataset):
-    def __init__(self, smplx_dir: Path, amass_paths: List, window_size: int, keypoint_format: str,
+    def __init__(self, smplx_models, smplx_gender: Optional[str], amass_paths: List, window_size: int, keypoint_format: str,
                  cache_dir: Path, reset_cache: bool, device='cuda'):
+        self.smplx_gender = smplx_gender
         self.origin_amass_paths = amass_paths
         self.device = device
-        self.smplx_models = load_smplx_models(smplx_dir, device, 128)
+        self.smplx_models = smplx_models
         self.half_win_size = window_size // 2
         if keypoint_format == 'coco':
             self.target_kps_mapping = generate_smplx_to_coco_mappings(SMPLX_JOINT_NAMES)
@@ -221,7 +166,7 @@ class AmassDataset(Dataset):
         for apath in tqdm(self.origin_amass_paths, 'regenerate epoch data'):
             data = np.load(str(apath))
             data = {key: data[key] for key in data.keys()}
-            keypoints = run_smpl_inference(data, self.smplx_models, self.device)
+            keypoints = run_smpl_inference(data, self.smplx_models, self.device, self.smplx_gender)
             data["keypoints_3d"] = keypoints
             dpath = self.data_dir / apath.name
             np.savez_compressed(str(dpath), **data)

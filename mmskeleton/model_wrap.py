@@ -2,6 +2,7 @@ import os
 import argparse
 import torch
 import torch.nn as nn
+import numpy as np
 import torch.nn.functional as F
 import torchvision.transforms as transforms
 from torch import optim
@@ -13,6 +14,8 @@ import pytorch_lightning as pl
 from mmskeleton.datasets import AmassDataset
 from pathlib import Path
 from mmskeleton.models import ST_GCN_18
+from common.smpl_util import load_smplx_models
+from common.geometry import rot6d_to_rotmat, rotation_matrix_to_angle_axis
 
 
 def _load_amass_path_list(csv_file):
@@ -46,28 +49,82 @@ class IKLoss(nn.Module):
     def forward(self, outputs, data_3d):
         gt_poses = outputs["poses"]
         pred_poses = data_3d["poses"]
-        pred_poses = pred_poses.view(pred_poses.shape[0], pred_poses.shape[1], -1, 3)
+        # pred_poses = pred_poses.view(pred_poses.shape[0], pred_poses.shape[1], -1, 3)
         pose_loss = self.criterion_pose(gt_poses, pred_poses)
         return pose_loss
+
+
+class Regressor(nn.Module):
+    def __init__(self, hparams):
+        super(Regressor, self).__init__()
+        self.graph_cfg = dict(layout=hparams.graph_layout,
+                              strategy='uniform',
+                              max_hop=hparams.max_hop,
+                              dilation=hparams.dilation)
+
+        self.backbone = ST_GCN_18(in_channels=hparams.kps_channel, graph_cfg=self.graph_cfg)
+
+        npose = 22 * 6
+        self.fc1 = nn.Linear(17 * 256 + npose, 1024)
+        self.drop1 = nn.Dropout()
+        self.fc2 = nn.Linear(1024, 1024)
+        self.drop2 = nn.Dropout()
+        self.decpose = nn.Linear(1024, npose)
+        nn.init.xavier_uniform_(self.decpose.weight, gain=0.01)
+
+        mean_params = np.load(hparams.smpl_mean)
+        # hack. this is mean SMPL model, not SMPLX. we don't have 6D mean smplx so far.
+        init_pose = torch.from_numpy(mean_params['pose'][:132]).unsqueeze(0)
+        self.register_buffer('init_pose', init_pose)
+
+    def forward(self, x, init_pose=None, n_iter=3):
+        """
+        :param x: NxTxVxC where N is batch size, T is temporal win size, V is the number of vertex. C is vertex channel
+        :param n_iter:
+        :param init_pose:
+        :return:
+        """
+        x = self.backbone(x)
+
+        batch_size, w_size, c = x.shape
+        n_samples = batch_size * w_size
+        x = x.view(batch_size * w_size, c)
+
+        if init_pose is None:
+            init_pose = self.init_pose.expand(n_samples, -1)
+
+        pred_pose = init_pose
+        for i in range(n_iter):
+            xc = torch.cat([x, pred_pose], 1)
+            xc = self.fc1(xc)
+            xc = self.drop1(xc)
+            xc = self.fc2(xc)
+            xc = self.drop2(xc)
+            pred_pose = self.decpose(xc) + pred_pose
+
+        pred_rotmat = rot6d_to_rotmat(pred_pose).view(n_samples, 22, 3, 3)
+
+        pose = rotation_matrix_to_angle_axis(pred_rotmat.reshape(-1, 3, 3)).reshape(batch_size, w_size, 66)
+
+        output = {
+            'poses': pose,
+            'rotmats': pred_rotmat
+        }
+
+        return output
 
 
 class IKModelWrapper(LightningModule):
     def __init__(self, hparams):
         super().__init__()
         self.hparams = hparams
-        self.graph_cfg = dict(layout=self.hparams.graph_layout,
-                              strategy='uniform',
-                              max_hop=self.hparams.max_hop,
-                              dilation=self.hparams.dilation)
-
-        self.ik_model = ST_GCN_18(in_channels=self.hparams.kps_channel, graph_cfg=self.graph_cfg,
-                                  n_out_joints=self.hparams.n_out_joints, n_out_channels=self.hparams.n_out_channels)
-
+        self.smplx_models = load_smplx_models(Path(self.hparams.amass) / 'smplx',
+                                              device='cuda', batch_size=self.hparams.bs)
+        self.regressor = Regressor(hparams)
         self.criterion = IKLoss('cuda')
 
     def forward(self, keypoints_3d):
-        preds = self.ik_model(keypoints_3d)
-        return {"poses": preds}
+        return self.regressor(keypoints_3d)
 
     def training_step(self, batch, batch_idx):
         poses_3d = batch["keypoints_3d"].cuda()
@@ -97,21 +154,19 @@ class IKModelWrapper(LightningModule):
         return torch.optim.Adam(self.parameters(), lr=self.hparams.lr)
 
     def train_dataloader(self):
-        train_paths = _load_amass_path_list(Path(self.hparams.data_dir) / 'train.csv')[:100]
-        smpl_x_dir = Path(self.hparams.amass) / 'smplx'
+        train_paths = _load_amass_path_list(Path(self.hparams.data_dir) / 'train.csv')
         cache_dir = Path(self.hparams.data_dir) / 'train_epoch_data'
-        ds = AmassDataset(smplx_dir=smpl_x_dir, amass_paths=train_paths, window_size=self.hparams.win_size,
+        ds = AmassDataset(smplx_models=self.smplx_models, amass_paths=train_paths, window_size=self.hparams.win_size,
                           keypoint_format=self.hparams.keypoint_format,
-                          cache_dir=cache_dir, reset_cache=self.hparams.regen_data)
+                          cache_dir=cache_dir, reset_cache=self.hparams.regen_data, smplx_gender='neutral')
         return DataLoader(ds, batch_size=self.hparams.bs, shuffle=True, num_workers=self.hparams.n_workers)
 
     def val_dataloader(self):
-        val_paths = _load_amass_path_list(Path(self.hparams.data_dir) / 'valid.csv')[:50]
-        smpl_x_dir = Path(self.hparams.amass) / 'smplx'
+        val_paths = _load_amass_path_list(Path(self.hparams.data_dir) / 'valid.csv')
         cache_dir = Path(self.hparams.data_dir) / 'valid_epoch_data'
-        ds = AmassDataset(smplx_dir=smpl_x_dir, amass_paths=val_paths, window_size=self.hparams.win_size,
+        ds = AmassDataset(smplx_models=self.smplx_models, amass_paths=val_paths, window_size=self.hparams.win_size,
                           keypoint_format=self.hparams.keypoint_format,
-                          cache_dir=cache_dir, reset_cache=self.hparams.regen_data)
+                          cache_dir=cache_dir, reset_cache=self.hparams.regen_data, smplx_gender='neutral')
         return [DataLoader(ds, batch_size=self.hparams.bs, shuffle=False, num_workers=self.hparams.n_workers)]
 
     @staticmethod
@@ -136,6 +191,8 @@ def add_args(parser):
     parser.add_argument('--data_dir', type=str, default='/media/F/datasets/amass/ik_model', help='data dir')
     parser.add_argument('--n_workers', type=int, default=8, help='data dir')
     parser.add_argument('--regen_data', action='store_true', help='data dir')
+    parser.add_argument('--smpl_mean', type=str,
+                        default="/media/F/thesis/motion_capture/data/smpl/smpl_mean_params.npz", help='data dir')
 
 
 def run_train():

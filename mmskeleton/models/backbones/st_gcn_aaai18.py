@@ -37,8 +37,6 @@ class ST_GCN_18(nn.Module):
     def __init__(self,
                  in_channels,
                  graph_cfg,
-                 n_out_joints,
-                 n_out_channels,
                  edge_importance_weighting=True,
                  data_bn=True,
                  **kwargs):
@@ -51,8 +49,6 @@ class ST_GCN_18(nn.Module):
                          requires_grad=False)
         self.register_buffer('A', A)
 
-        self.n_out_joints = n_out_joints
-        self.n_out_channels = n_out_channels
         self.n_in_keypoints = A.size(1)
 
         # build networks
@@ -88,9 +84,6 @@ class ST_GCN_18(nn.Module):
         else:
             self.edge_importance = [1] * len(self.st_gcn_networks)
 
-        self.regressor = nn.Conv1d(256 * self.n_in_keypoints,
-                                   self.n_out_channels * self.n_out_joints, kernel_size=1)
-
     def forward(self, x):
         """
         :param x: NxTxVxC where N is batch size, T is temporal win size, V is the number of vertex. C is vertex channel
@@ -109,38 +102,9 @@ class ST_GCN_18(nn.Module):
         for gcn, importance in zip(self.st_gcn_networks, self.edge_importance):
             x, _ = gcn(x, self.A * importance)
 
-        x = x.transpose(2, 3)
-        x = x.contiguous().view(N, -1, T)
-        x = self.regressor(x)
-        x = x.transpose(1, 2)
-        x = x.view(N, T, self.n_out_joints, self.n_out_channels)
+        x = x.permute(0, 2, 3, 1)
+        x = x.contiguous().view(N, T, -1)
         return x
-
-    def extract_feature(self, x):
-        # data normalization
-        N, C, T, V, M = x.size()
-        x = x.permute(0, 4, 3, 1, 2).contiguous()
-        x = x.view(N * M, V * C, T)
-        x = self.data_bn(x)
-        x = x.view(N, M, V, C, T)
-        x = x.permute(0, 1, 3, 4, 2).contiguous()
-        x = x.view(N * M, C, T, V)
-
-        # forwad
-        for gcn, importance in zip(self.st_gcn_networks, self.edge_importance):
-            x, _ = gcn(x, self.A * importance)
-
-        x1 = self.regressor(x)
-
-        # _, c, t, v = x.size()
-        # feature = x.view(N, M, c, t, v).permute(0, 2, 3, 4, 1)
-        #
-        # # prediction
-        # x = self.fcn(x)
-        # output = x.view(N, M, -1, t, v).permute(0, 2, 3, 4, 1)
-
-        # return output, feature
-        return x1
 
 
 class st_gcn_block(nn.Module):

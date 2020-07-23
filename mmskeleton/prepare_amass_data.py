@@ -3,7 +3,8 @@ from sklearn.model_selection import train_test_split
 import csv
 from pathlib import Path
 
-if __name__ == "__main__":
+
+def split_train_test():
     amass_dir = Path('/media/F/datasets/amass/motion_data')
     cmu_sample_path = Path('/media/F/thesis/motion_capture/data/cmu_action_list.csv')
     with open(cmu_sample_path, 'rt') as file:
@@ -30,3 +31,11 @@ if __name__ == "__main__":
     with open(out_dir / 'valid.csv', 'w') as file:
         for ll in valid_paths:
             file.write(f'{ll}\n')
+
+
+def calc_mean_amass():
+    pass
+
+
+if __name__ == "__main__":
+    split_train_test()
