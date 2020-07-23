@@ -1,6 +1,6 @@
 import torch
 from pathlib import Path
-from mmskeleton.model_wrap import IKModelWrapper
+from model_wrap import IKModelWrapper
 from mmskeleton.datasets import AmassDataset
 from smplx import create as smplx_create
 import trimesh

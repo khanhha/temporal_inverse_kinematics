@@ -65,11 +65,12 @@ class Regressor(nn.Module):
         self.backbone = ST_GCN_18(in_channels=hparams.kps_channel, graph_cfg=self.graph_cfg)
 
         npose = 22 * 6
-        self.fc1 = nn.Linear(17 * 256 + npose, 1024)
+        channel = 512
+        self.fc1 = nn.Linear(17 * 256 + npose, channel)
         self.drop1 = nn.Dropout()
-        self.fc2 = nn.Linear(1024, 1024)
+        self.fc2 = nn.Linear(channel, channel)
         self.drop2 = nn.Dropout()
-        self.decpose = nn.Linear(1024, npose)
+        self.decpose = nn.Linear(channel, npose)
         nn.init.xavier_uniform_(self.decpose.weight, gain=0.01)
 
         mean_params = np.load(hparams.smpl_mean)
@@ -190,6 +191,7 @@ def add_args(parser):
     parser.add_argument('--amass', type=str, default='/media/F/datasets/amass', help='amass dir')
     parser.add_argument('--data_dir', type=str, default='/media/F/datasets/amass/ik_model', help='data dir')
     parser.add_argument('--n_workers', type=int, default=8, help='data dir')
+    parser.add_argument('--max_epoch', type=int, default=200, help='max epoch')
     parser.add_argument('--regen_data', action='store_true', help='data dir')
     parser.add_argument('--smpl_mean', type=str,
                         default="/media/F/thesis/motion_capture/data/smpl/smpl_mean_params.npz", help='data dir')
