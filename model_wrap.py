@@ -64,7 +64,7 @@ class Regressor(nn.Module):
 
         self.backbone = ST_GCN_18(in_channels=hparams.kps_channel, graph_cfg=self.graph_cfg)
 
-        npose = 22 * 6
+        # npose = 22 * 6
         # channel = 512
         # self.fc1 = nn.Linear(17 * 256 + npose, channel)
         # self.drop1 = nn.Dropout()
@@ -77,6 +77,7 @@ class Regressor(nn.Module):
         # init_pose = torch.from_numpy(mean_params['pose'][:132]).unsqueeze(0)
         # self.register_buffer('init_pose', init_pose)
 
+        npose = 22 * 3
         self.pose_regressor = nn.Linear(17 * 256, npose)
 
     def forward(self, x, init_pose=None, n_iter=3):
@@ -90,7 +91,7 @@ class Regressor(nn.Module):
 
         batch_size, w_size, c = x.shape
         n_samples = batch_size * w_size
-        x = x.view(batch_size * w_size, c)
+        x = x.view(n_samples, c)
         pred_pose = self.pose_regressor(x)
 
         # if init_pose is None:
@@ -105,15 +106,18 @@ class Regressor(nn.Module):
         #     xc = self.drop2(xc)
         #     pred_pose = self.decpose(xc) + pred_pose
 
-        pred_rotmat = rot6d_to_rotmat(pred_pose).view(n_samples, 22, 3, 3)
+        # pred_rotmat = rot6d_to_rotmat(pred_pose).view(n_samples, 22, 3, 3)
 
-        pose = rotation_matrix_to_angle_axis(pred_rotmat.reshape(-1, 3, 3)).reshape(batch_size, w_size, 66)
+        # pose = rotation_matrix_to_angle_axis(pred_rotmat.reshape(-1, 3, 3)).reshape(batch_size, w_size, 66)
+        # output = {
+        #     'poses': pose,
+        #     'rotmats': pred_rotmat
+        # }
 
+        pred_pose = pred_pose.view(batch_size, w_size, 66)
         output = {
-            'poses': pose,
-            'rotmats': pred_rotmat
+            'poses': pred_pose
         }
-
         return output
 
 
