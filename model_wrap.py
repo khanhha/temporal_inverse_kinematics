@@ -158,6 +158,9 @@ class IKModelWrapper(LightningModule):
 
     def train_dataloader(self):
         train_paths = _load_amass_path_list(Path(self.hparams.data_dir) / 'train.csv')
+        if self.hparams.n_train > 0:
+            train_paths = train_paths[:self.hparams.n_train]
+
         cache_dir = Path(self.hparams.data_dir) / 'train_epoch_data'
         ds = AmassDataset(smplx_models=self.smplx_models, amass_paths=train_paths, window_size=self.hparams.win_size,
                           keypoint_format=self.hparams.keypoint_format,
@@ -166,6 +169,9 @@ class IKModelWrapper(LightningModule):
 
     def val_dataloader(self):
         val_paths = _load_amass_path_list(Path(self.hparams.data_dir) / 'valid.csv')
+        if self.hparams.n_valid > 0:
+            val_paths = val_paths[:self.hparams.n_valid]
+
         cache_dir = Path(self.hparams.data_dir) / 'valid_epoch_data'
         ds = AmassDataset(smplx_models=self.smplx_models, amass_paths=val_paths, window_size=self.hparams.win_size,
                           keypoint_format=self.hparams.keypoint_format,
@@ -197,6 +203,8 @@ def add_args(parser):
     parser.add_argument('--regen_data', action='store_true', help='data dir')
     parser.add_argument('--smpl_mean', type=str,
                         default="/media/F/thesis/motion_capture/data/smpl/smpl_mean_params.npz", help='data dir')
+    parser.add_argument('--n_train', type=int, default=-1, help='max epoch')
+    parser.add_argument('--n_valid', type=int, default=-1, help='max epoch')
 
 
 def run_train():
