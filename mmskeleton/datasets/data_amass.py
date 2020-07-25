@@ -70,18 +70,20 @@ def convert_smplx(smplx_kps, mappings, do_copy=False):
     n_kps = len(mappings)
     out_kps = np.zeros((smplx_kps.shape[0], n_kps, smplx_kps.shape[2]), dtype=np.float32)
     for target_idx, smplx_idx in enumerate(mappings):
-        out_kps[:, target_idx, :] = smplx_kps[:, smplx_idx, :]
+        out_kps[:, target_idx, :] = smplx_kps[:, smplx_idx, :].copy() if do_copy else smplx_kps[:, smplx_idx, :]
     return out_kps
 
 
 class AmassDataset(Dataset):
-    def __init__(self, smplx_models, smplx_gender: Optional[str], amass_paths: List, window_size: int, keypoint_format: str,
+    def __init__(self, smplx_models, smplx_gender: Optional[str], amass_paths: List, window_size: int,
+                 keypoint_format: str,
                  cache_dir: Path, reset_cache: bool, device='cuda'):
         self.smplx_gender = smplx_gender
         self.origin_amass_paths = amass_paths
         self.device = device
         self.smplx_models = smplx_models
         self.half_win_size = window_size // 2
+        self.relative_pose = True
         if keypoint_format == 'coco':
             self.target_kps_mapping = generate_smplx_to_coco_mappings(SMPLX_JOINT_NAMES)
         else:
@@ -111,7 +113,10 @@ class AmassDataset(Dataset):
         data = self.data_anims[data_idx]
 
         keypoints_3d = sample_window(data["keypoints_3d"], local_idx, self.half_win_size)
-        keypoints_3d = convert_smplx(keypoints_3d, self.target_kps_mapping, False)
+        keypoints_3d = convert_smplx(keypoints_3d, self.target_kps_mapping, True)
+        if self.relative_pose:
+            roots = 0.5 * (keypoints_3d[:, 11, :] + keypoints_3d[:, 12, :])
+            keypoints_3d = keypoints_3d - roots[:, np.newaxis, :]
 
         # fig = plt.figure()
         # ax = fig.add_subplot(111, projection='3d')
@@ -175,14 +180,18 @@ class AmassDataset(Dataset):
 
 
 def run_test():
+    from common.smpl_util import load_smplx_models
     smplx_dir = Path('/media/F/datasets/amass/smplx')
     amss_dir = Path('/media/F/datasets/amass/motion_data/')
     post_process_dir = Path('/media/F/datasets/amass/motion_data/test_data')
     os.makedirs(post_process_dir, exist_ok=True)
     amss_paths = [apath for apath in amss_dir.rglob('*.npz') if apath.stem.endswith('_poses')]
-    amss_paths = amss_paths[:2]
-    ds = AmassDataset(smplx_dir=smplx_dir, amass_paths=amss_paths, window_size=7, keypoint_format='coco',
-                      cache_dir=post_process_dir, reset_cache=True)
+    amss_paths = amss_paths[:1]
+    device = 'cpu'
+    smplx_models = load_smplx_models(smplx_dir, device, 9)
+    ds = AmassDataset(smplx_models=smplx_models, smplx_gender='neutral', amass_paths=amss_paths, window_size=9,
+                      keypoint_format='coco',
+                      cache_dir=post_process_dir, reset_cache=True, device=device)
     print(ds[500])
     dl = DataLoader(ds, batch_size=16)
     for batch in dl:
