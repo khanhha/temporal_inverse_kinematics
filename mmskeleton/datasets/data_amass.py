@@ -74,16 +74,46 @@ def convert_smplx(smplx_kps, mappings, do_copy=False):
     return out_kps
 
 
+def coco_kps_sigma():
+    # https://github.com/cocodataset/cocoapi/blob/8c9bcc3cf640524c4c20a9c40e89cb6a2f2fa0e9/PythonAPI/pycocotools/cocoeval.py#L498
+    predef_signal_arr = np.array(
+        [.26, .25, .25, .35, .35, .79, .79, .72, .72, .62, .62, 1.07, 1.07, .87, .87, .89, .89], dtype=np.float32) * 0.1
+    return predef_signal_arr
+
+
+def _aug_3d_keypoints(anim_poses_3d, kps_sigmas):
+    """
+    :param anim_poses_3d: NxJx3
+    """
+    n_poses, n_kps = anim_poses_3d.shape[:2]
+
+    poses_bmin = np.min(anim_poses_3d, axis=1)
+    poses_bmax = np.max(anim_poses_3d, axis=1)
+    sizes = poses_bmax - poses_bmin
+    mean_size = np.mean(sizes, axis=0)
+    # scale sigmal down a bit => original sigma from coco amin_ds is too big
+    px_kps_sigmas = np.array([s * kps_sigmas * 0.003 for s in mean_size]).T
+    # each keypoint has its own noise distribution
+    gaus_mean = (0.0, 0.0, 0.0)
+    for j, sigma in enumerate(px_kps_sigmas):
+        cov = ((sigma[0], 0.0, 0.0), (0.0, sigma[1], 0.0), (0.0, 0.0, sigma[2]))
+        kps_noise = np.random.multivariate_normal(gaus_mean, cov, n_poses)
+        anim_poses_3d[:, j] = anim_poses_3d[:, j] + kps_noise.astype(np.float32)
+
+    return anim_poses_3d
+
+
 class AmassDataset(Dataset):
     def __init__(self, smplx_models, smplx_gender: Optional[str], amass_paths: List, window_size: int,
-                 keypoint_format: str,
-                 cache_dir: Path, reset_cache: bool, device='cuda'):
+                 keypoint_format: str, cache_dir: Path, reset_cache: bool, device='cuda', add_gaussian_noise=True):
         self.smplx_gender = smplx_gender
         self.origin_amass_paths = amass_paths
         self.device = device
         self.smplx_models = smplx_models
         self.half_win_size = window_size // 2
         self.relative_pose = True
+        self.add_gaussian_noise = True
+        self.kps_noise_sigmas = coco_kps_sigma()
         if keypoint_format == 'coco':
             self.target_kps_mapping = generate_smplx_to_coco_mappings(SMPLX_JOINT_NAMES)
         else:
@@ -117,6 +147,8 @@ class AmassDataset(Dataset):
         if self.relative_pose:
             roots = 0.5 * (keypoints_3d[:, 11, :] + keypoints_3d[:, 12, :])
             keypoints_3d = keypoints_3d - roots[:, np.newaxis, :]
+        if self.add_gaussian_noise:
+            keypoints_3d = _aug_3d_keypoints(keypoints_3d, self.kps_noise_sigmas)
 
         # fig = plt.figure()
         # ax = fig.add_subplot(111, projection='3d')
@@ -127,6 +159,7 @@ class AmassDataset(Dataset):
         # plt.show(block=True)
         # fig.clear()
         # plt.clf()
+
         poses = sample_window(data["poses"], local_idx, self.half_win_size)
         betas = data["betas"]
         return {"keypoints_3d": keypoints_3d.astype(np.float32),
@@ -144,12 +177,7 @@ class AmassDataset(Dataset):
         return n_samples
 
     def generate_index_file_mapping(self):
-        n_samples = 0
-        for apath in self.data_paths:
-            data = np.load(str(apath))
-            data = {key: data[key] for key in data.keys()}
-            kps = data["keypoints_3d"]
-            n_samples += kps.shape[0]
+        n_samples = self.count_samples()
 
         mappings = n_samples * [None]
         current_offset = 0
@@ -160,6 +188,7 @@ class AmassDataset(Dataset):
             for i in range(current_offset, new_offset):
                 mappings[i] = (path_idx, current_offset)
             current_offset = new_offset
+        # assert all([m[1] >= 0 for m in mappings]), 'invalid mapping index'
         return mappings
 
     def list_data_paths(self, amass_paths):
