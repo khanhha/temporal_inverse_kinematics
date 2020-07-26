@@ -5,6 +5,8 @@ from mmskeleton.datasets import AmassDataset
 from common.smpl_util import load_smplx_models
 import trimesh
 import numpy as np
+from common.kornia_geometry_conversion import (angle_axis_to_rotation_matrix, rotation_matrix_to_angle_axis,
+                                               angle_axis_to_quaternion, quaternion_to_angle_axis)
 
 
 def _load_amass_path_list(csv_file):
@@ -21,12 +23,19 @@ if __name__ == "__main__":
     cache_dir = Path('/media/F/datasets/amass/tmp_debug')
     model = IKModelWrapper.load_from_checkpoint(str(ckpt_path))
     val_paths = _load_amass_path_list(Path(data_dir) / 'valid.csv')[2:3]
+
+    org_aa = torch.tensor([0.0, 1.0, 0.0]).unsqueeze(0).repeat((9, 1)) * np.pi * 0.5
+    aug_aa = torch.tensor([0.0, 1.0, 0.0]).unsqueeze(0).repeat((9, 1)) * np.pi * 1.5
+    e = org_aa - quaternion_to_angle_axis(angle_axis_to_quaternion(org_aa))
+    final_qu = angle_axis_to_quaternion(aug_aa) * angle_axis_to_quaternion(org_aa)
+    global_orient = quaternion_to_angle_axis(final_qu)
+
     smpl_x_dir = Path(amass_dir) / 'smplx'
     smplx_models = load_smplx_models(smpl_x_dir, 'cpu', 9)
 
     ds = AmassDataset(smplx_models=smplx_models, amass_paths=val_paths, smplx_gender=None,
                       window_size=model.hparams.win_size, keypoint_format='coco', cache_dir=cache_dir,
-                      reset_cache=True, device='cpu', add_gaussian_noise=False)
+                      reset_cache=False, device='cpu', add_gaussian_noise=False)
 
     n = len(ds)
     in_data = ds[50]
@@ -41,10 +50,9 @@ if __name__ == "__main__":
         betas = torch.from_numpy(betas)
         pred_poses = pred_poses.view(9, -1)
         smplx_model = smplx_models["male"]
-        # prd_body = smplx_model(betas=None, global_orient=pred_poses[:, :3], body_pose=pred_poses[:, 3:66])
-        # gt_body = smplx_model(betas=None, global_orient=poses[:, :3], body_pose=poses[:, 3:66])
         prd_body = smplx_model(betas=None, global_orient=None, body_pose=pred_poses[:, 3:66])
-        gt_body = smplx_model(betas=None, global_orient=None, body_pose=poses[:, 3:66])
+
+        gt_body = smplx_model(betas=None, global_orient=global_orient, body_pose=poses[:, 3:66])
 
         t_idx = 4
         prd_mesh = trimesh.Trimesh(vertices=prd_body.vertices[t_idx].detach().numpy(), faces=smplx_model.faces,

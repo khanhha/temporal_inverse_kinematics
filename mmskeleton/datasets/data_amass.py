@@ -7,6 +7,7 @@ from torch.utils.data import Dataset, DataLoader
 from smplx import create as smplx_create
 from tqdm import tqdm
 import os
+from scipy.spatial import transform
 from smplx.joint_names import JOINT_NAMES as SMPLX_JOINT_NAMES
 from common.draw_util import draw_3d_pose
 from common.smpl_util import run_smpl_inference
@@ -114,27 +115,38 @@ class AmassDataset(Dataset):
         self.relative_pose = True
         self.add_gaussian_noise = True
         self.kps_noise_sigmas = coco_kps_sigma()
+        self.aug_root_orientation = True
         if keypoint_format == 'coco':
             self.target_kps_mapping = generate_smplx_to_coco_mappings(SMPLX_JOINT_NAMES)
         else:
             raise ValueError('unsupported keypoint format')
 
         self.data_dir = cache_dir
-        if reset_cache:
-            os.makedirs(str(self.data_dir), exist_ok=True)
-            self.data_paths = self.generate_data()
-        else:
-            self.data_paths = self.list_data_paths(amass_paths)
+        os.makedirs(str(self.data_dir), exist_ok=True)
+        self.data_paths = []
+        self.data_anims = []
+        self.index_mappings = []
+        self.prepare_epoch_training_data(0)
+
+    def prepare_epoch_training_data(self, epoch_idx):
+        for apath in self.data_dir.glob('*.npz'):
+            os.remove(str(apath))
+        self.data_paths = self.regenerate_data(epoch_idx)
         self.data_anims = []
         for dpath in self.data_paths:
             d = np.load(str(dpath), allow_pickle=True)
             d = {k: d[k].item() if d[k].dtype == object else d[k] for k, v in d.items()}
             self.data_anims.append(d)
-
         self.index_mappings = self.generate_index_file_mapping()
 
     def __len__(self):
         return len(self.index_mappings)
+
+    def on_epoch_end(self, epoch_idx):
+        """
+        should be called when epoch ended for data augmentation
+        """
+        self.prepare_epoch_training_data(epoch_idx)
 
     def __getitem__(self, idx):
         data_idx, offset = self.index_mappings[idx]
@@ -147,6 +159,7 @@ class AmassDataset(Dataset):
         if self.relative_pose:
             roots = 0.5 * (keypoints_3d[:, 11, :] + keypoints_3d[:, 12, :])
             keypoints_3d = keypoints_3d - roots[:, np.newaxis, :]
+
         if self.add_gaussian_noise:
             keypoints_3d = _aug_3d_keypoints(keypoints_3d, self.kps_noise_sigmas)
 
@@ -167,7 +180,7 @@ class AmassDataset(Dataset):
                 "betas": betas.astype(np.float32)}
 
     def count_samples(self):
-        apaths = sorted([apath for apath in self.data_dir.rglob('*.npz')])
+        apaths = sorted([apath for apath in self.data_dir.glob('*.npz')])
         n_samples = 0
         for apath in apaths:
             data = np.load(str(apath))
@@ -188,19 +201,27 @@ class AmassDataset(Dataset):
             for i in range(current_offset, new_offset):
                 mappings[i] = (path_idx, current_offset)
             current_offset = new_offset
-        # assert all([m[1] >= 0 for m in mappings]), 'invalid mapping index'
+        assert all([m[1] >= 0 for m in mappings]), 'invalid mapping index'
         return mappings
 
-    def list_data_paths(self, amass_paths):
-        hash_paths = {apath.stem for apath in amass_paths}
-        return sorted([apath for apath in self.data_dir.rglob('*.npz') if apath.stem in hash_paths])
-
-    def generate_data(self):
+    def regenerate_data(self, random_seed):
         data_paths = []
+        rand_stt = np.random.RandomState(seed=random_seed)
         for apath in tqdm(self.origin_amass_paths, 'regenerate epoch data'):
             data = np.load(str(apath))
             data = {key: data[key] for key in data.keys()}
-            keypoints = run_smpl_inference(data, self.smplx_models, self.device, self.smplx_gender)
+            if self.aug_root_orientation:
+                aug_angle = np.pi * rand_stt.rand()
+                org_rots = transform.Rotation.from_rotvec(data["poses"][:, :3])
+                # randomly rotate around z axis
+                aug_rot = transform.Rotation.from_rotvec(np.array([0.0, 0.0, 1.0]) * aug_angle)
+                new_rots = aug_rot * org_rots
+                data["poses"][:, :3] = new_rots.as_rotvec()
+
+                # we don't care about global translation
+            keypoints = run_smpl_inference(data, self.smplx_models, self.device, self.smplx_gender,
+                                           apply_trans=False,
+                                           apply_root_rot=True)
             data["keypoints_3d"] = keypoints
             dpath = self.data_dir / apath.name
             np.savez_compressed(str(dpath), **data)

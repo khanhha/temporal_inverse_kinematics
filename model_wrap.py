@@ -126,7 +126,7 @@ class IKModelWrapper(LightningModule):
         super().__init__()
         self.hparams = hparams
         self.smplx_models = load_smplx_models(Path(self.hparams.amass) / 'smplx',
-                                              device='cuda', batch_size=self.hparams.bs)
+                                              device='cuda', batch_size=512)
         self.regressor = Regressor(self.hparams)
         self.criterion = IKLoss('cuda')
 
@@ -156,6 +156,11 @@ class IKModelWrapper(LightningModule):
             'log': {f'val/{loss_name}': loss for loss_name, loss in losses.items()}
         }
         return val_log
+
+    def on_epoch_end(self):
+        if self.trainer is not None:
+            dl = self.trainer.train_dataloader
+            dl.dataset.on_epoch_end(self.current_epoch)
 
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=self.hparams.lr)

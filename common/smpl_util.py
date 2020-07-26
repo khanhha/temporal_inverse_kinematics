@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 from smplx import create as smplx_create
+from typing import Optional
 
 
 def load_smplx_models(smplx_dir, device, batch_size):
@@ -17,7 +18,7 @@ def load_smplx_models(smplx_dir, device, batch_size):
     return {'male': male_smplx, 'female': female_smplx, 'neutral': neutral_smplx}
 
 
-def run_smpl_inference(data, smplx_models, device, gender):
+def run_smpl_inference(data, smplx_models, device, gender: Optional[str], apply_trans=True, apply_root_rot=True):
     if gender is None:
         gender = str(data["gender"])
     smplx_model = smplx_models["male"] if 'male' in gender else smplx_models["female"]
@@ -44,8 +45,8 @@ def run_smpl_inference(data, smplx_models, device, gender):
             trans = np.concatenate([trans, np.zeros((pad, trans.shape[1]), dtype=np.float32)], axis=0)
 
         poses = torch.from_numpy(poses).to(device)
-        trans = torch.from_numpy(trans).to(device)
-        root_orient = poses[:, :3]
+        trans = torch.from_numpy(trans).to(device) if apply_trans else None
+        root_orient = poses[:, :3] if apply_root_rot else None
         pose_body = poses[:, 3:66]
         left_pose_hand = poses[:, 66:66 + 45]
         right_pose_hand = poses[:, 66 + 45:66 + 90]
