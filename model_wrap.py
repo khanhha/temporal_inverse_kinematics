@@ -126,7 +126,7 @@ class IKModelWrapper(LightningModule):
         super().__init__()
         self.hparams = hparams
         self.smplx_models = load_smplx_models(Path(self.hparams.amass) / 'smplx',
-                                              device='cuda', batch_size=512)
+                                              device='cuda', batch_size=1024)
         self.regressor = Regressor(self.hparams)
         self.criterion = IKLoss('cuda')
 
@@ -157,7 +157,7 @@ class IKModelWrapper(LightningModule):
         }
         return val_log
 
-    def on_epoch_end(self):
+    def on_epotch_end(self):
         if self.trainer is not None:
             dl = self.trainer.train_dataloader
             dl.dataset.on_epoch_end(self.current_epoch)
@@ -170,10 +170,8 @@ class IKModelWrapper(LightningModule):
         if self.hparams.n_train > 0:
             train_paths = train_paths[:self.hparams.n_train]
 
-        cache_dir = Path(self.hparams.data_dir) / 'train_epoch_data'
         ds = AmassDataset(smplx_models=self.smplx_models, amass_paths=train_paths, window_size=self.hparams.win_size,
-                          keypoint_format=self.hparams.keypoint_format,
-                          cache_dir=cache_dir, reset_cache=self.hparams.regen_data, smplx_gender='neutral')
+                          keypoint_format=self.hparams.keypoint_format, smplx_gender='neutral')
         return DataLoader(ds, batch_size=self.hparams.bs, shuffle=True, num_workers=self.hparams.n_workers)
 
     def val_dataloader(self):
@@ -181,16 +179,14 @@ class IKModelWrapper(LightningModule):
         if self.hparams.n_valid > 0:
             val_paths = val_paths[:self.hparams.n_valid]
 
-        cache_dir = Path(self.hparams.data_dir) / 'valid_epoch_data'
         ds = AmassDataset(smplx_models=self.smplx_models, amass_paths=val_paths, window_size=self.hparams.win_size,
-                          keypoint_format=self.hparams.keypoint_format,
-                          cache_dir=cache_dir, reset_cache=self.hparams.regen_data, smplx_gender='neutral')
+                          keypoint_format=self.hparams.keypoint_format, smplx_gender='neutral')
         return [DataLoader(ds, batch_size=self.hparams.bs, shuffle=False, num_workers=self.hparams.n_workers)]
 
     @staticmethod
     def add_model_specific_args(parent_parser):
         parser = argparse.ArgumentParser(parents=[parent_parser], add_help=False)
-        parser.add_argument('--lr', type=float, default=0.001)
+        parser.add_argument('--lr', type=float, default=1e-4)
         parser.add_argument('--win_size', default=9, type=int, help='batch size in terms of predicted frames')
         parser.add_argument('--bs', default=256, type=int, help='batch size in terms of predicted frames')
         parser.add_argument('--kps_channel', default=3, type=int, help='keypoint channel')
@@ -209,7 +205,6 @@ def add_args(parser):
     parser.add_argument('--data_dir', type=str, default='/media/F/datasets/amass/ik_model', help='data dir')
     parser.add_argument('--n_workers', type=int, default=8, help='data dir')
     parser.add_argument('--max_epoch', type=int, default=200, help='max epoch')
-    parser.add_argument('--regen_data', action='store_true', help='data dir')
     parser.add_argument('--smpl_mean', type=str,
                         default="/media/F/thesis/motion_capture/data/smpl/smpl_mean_params.npz", help='data dir')
     parser.add_argument('--n_train', type=int, default=-1, help='max epoch')

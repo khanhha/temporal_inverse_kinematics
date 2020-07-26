@@ -106,14 +106,14 @@ def _aug_3d_keypoints(anim_poses_3d, kps_sigmas):
 
 class AmassDataset(Dataset):
     def __init__(self, smplx_models, smplx_gender: Optional[str], amass_paths: List, window_size: int,
-                 keypoint_format: str, cache_dir: Path, reset_cache: bool, device='cuda', add_gaussian_noise=True):
+                 keypoint_format: str, device='cuda', add_gaussian_noise=True):
         self.smplx_gender = smplx_gender
         self.origin_amass_paths = amass_paths
         self.device = device
         self.smplx_models = smplx_models
         self.half_win_size = window_size // 2
         self.relative_pose = True
-        self.add_gaussian_noise = True
+        self.add_gaussian_noise = add_gaussian_noise
         self.kps_noise_sigmas = coco_kps_sigma()
         self.aug_root_orientation = True
         if keypoint_format == 'coco':
@@ -121,22 +121,13 @@ class AmassDataset(Dataset):
         else:
             raise ValueError('unsupported keypoint format')
 
-        self.data_dir = cache_dir
-        os.makedirs(str(self.data_dir), exist_ok=True)
         self.data_paths = []
         self.data_anims = []
         self.index_mappings = []
         self.prepare_epoch_training_data(0)
 
     def prepare_epoch_training_data(self, epoch_idx):
-        for apath in self.data_dir.glob('*.npz'):
-            os.remove(str(apath))
-        self.data_paths = self.regenerate_data(epoch_idx)
-        self.data_anims = []
-        for dpath in self.data_paths:
-            d = np.load(str(dpath), allow_pickle=True)
-            d = {k: d[k].item() if d[k].dtype == object else d[k] for k, v in d.items()}
-            self.data_anims.append(d)
+        self.data_anims = self.regenerate_data(epoch_idx)
         self.index_mappings = self.generate_index_file_mapping()
 
     def __len__(self):
@@ -180,11 +171,8 @@ class AmassDataset(Dataset):
                 "betas": betas.astype(np.float32)}
 
     def count_samples(self):
-        apaths = sorted([apath for apath in self.data_dir.glob('*.npz')])
         n_samples = 0
-        for apath in apaths:
-            data = np.load(str(apath))
-            data = {key: data[key] for key in data.keys()}
+        for data in self.data_anims:
             kps = data["keypoints_3d"]
             n_samples += kps.shape[0]
         return n_samples
@@ -194,24 +182,23 @@ class AmassDataset(Dataset):
 
         mappings = n_samples * [None]
         current_offset = 0
-        for path_idx, apath in enumerate(self.data_paths):
-            data = np.load(str(apath))
-            kps = data["keypoints_3d"]
-            new_offset = current_offset + kps.shape[0]
+        for data_idx, data in enumerate(self.data_anims):
+            new_offset = current_offset + data["poses"].shape[0]
             for i in range(current_offset, new_offset):
-                mappings[i] = (path_idx, current_offset)
+                mappings[i] = (data_idx, current_offset)
             current_offset = new_offset
         assert all([m[1] >= 0 for m in mappings]), 'invalid mapping index'
         return mappings
 
     def regenerate_data(self, random_seed):
-        data_paths = []
+        data_s = []
         rand_stt = np.random.RandomState(seed=random_seed)
         for apath in tqdm(self.origin_amass_paths, 'regenerate epoch data'):
             data = np.load(str(apath))
-            data = {key: data[key] for key in data.keys()}
+            data = {k: data[k].item() if data[k].dtype == object else data[k] for k, v in data.items()}
+
             if self.aug_root_orientation:
-                aug_angle = np.pi * rand_stt.rand()
+                aug_angle = 2.0 * np.pi * rand_stt.rand()
                 org_rots = transform.Rotation.from_rotvec(data["poses"][:, :3])
                 # randomly rotate around z axis
                 aug_rot = transform.Rotation.from_rotvec(np.array([0.0, 0.0, 1.0]) * aug_angle)
@@ -223,10 +210,8 @@ class AmassDataset(Dataset):
                                            apply_trans=False,
                                            apply_root_rot=True)
             data["keypoints_3d"] = keypoints
-            dpath = self.data_dir / apath.name
-            np.savez_compressed(str(dpath), **data)
-            data_paths.append(dpath)
-        return data_paths
+            data_s.append(data)
+        return data_s
 
 
 def run_test():
