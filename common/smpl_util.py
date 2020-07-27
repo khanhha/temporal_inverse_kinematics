@@ -28,7 +28,7 @@ def run_smpl_inference(data, smplx_models, device,
     frm_trans = data["trans"].astype(np.float32)
     n_poses = frm_poses.shape[0]
     beta = data["betas"][:10][np.newaxis, :]
-    frm_betas = np.tile(beta, (n_poses, 1))
+    frm_betas = np.tile(beta, (n_poses, 1)).astype(np.float32)
     frm_joints = []
     n_batch = (n_poses // batch_size) + 1
     for i in range(n_batch):
@@ -69,3 +69,5 @@ def run_smpl_inference(data, smplx_models, device,
     frm_joints = np.concatenate(frm_joints, axis=0)
 
     return frm_joints
+
+

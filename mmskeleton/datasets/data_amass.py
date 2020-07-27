@@ -12,6 +12,7 @@ from scipy.spatial import transform
 from smplx.joint_names import JOINT_NAMES as SMPLX_JOINT_NAMES
 from common.draw_util import draw_3d_pose
 from common.smpl_util import run_smpl_inference
+from common.keypoints_util import generate_smplx_to_coco_mappings
 
 
 def sample_window(arr, idx, h_win_size):
@@ -39,28 +40,6 @@ def sample_window(arr, idx, h_win_size):
     win = arr[idx + pad_left - h_win_size:idx + pad_left + h_win_size + 1]
     # assert win.shape[0] == 2*h_win_size + 1, f'unexpected shape: {win.shape}. idx = {idx}. pad_right = {pad_right}'
     return win
-
-
-def generate_smplx_to_coco_mappings(smplx_kps_names: List[str]):
-    mappings = 17 * [0]
-    mappings[0] = smplx_kps_names.index('nose')
-    mappings[1] = smplx_kps_names.index('left_eye')
-    mappings[2] = smplx_kps_names.index('right_eye')
-    mappings[3] = smplx_kps_names.index('left_ear')
-    mappings[4] = smplx_kps_names.index('right_ear')
-    mappings[5] = smplx_kps_names.index('left_shoulder')
-    mappings[6] = smplx_kps_names.index('right_shoulder')
-    mappings[7] = smplx_kps_names.index('left_elbow')
-    mappings[8] = smplx_kps_names.index('right_elbow')
-    mappings[9] = smplx_kps_names.index('left_wrist')
-    mappings[10] = smplx_kps_names.index('right_wrist')
-    mappings[11] = smplx_kps_names.index('left_hip')
-    mappings[12] = smplx_kps_names.index('right_hip')
-    mappings[13] = smplx_kps_names.index('left_knee')
-    mappings[14] = smplx_kps_names.index('right_knee')
-    mappings[15] = smplx_kps_names.index('left_ankle')
-    mappings[16] = smplx_kps_names.index('right_ankle')
-    return mappings
 
 
 def convert_smplx(smplx_kps, mappings, do_copy=False):
@@ -237,6 +216,24 @@ class AmassDataset(Dataset):
             data["keypoints_3d"] = keypoints
             data_s.append(data)
         return data_s
+
+
+class InferenceDataset(Dataset):
+    def __init__(self, input_3d_poses: np.ndarray, win_size: int, relative_pose=True):
+        self.poses_3d = input_3d_poses
+        self.half_win_size = win_size // 2
+        self.relative_pose = relative_pose
+
+    def __len__(self):
+        return self.poses_3d.shape[0]
+
+    def __getitem__(self, idx):
+        win_3d_poses = sample_window(self.poses_3d, idx, self.half_win_size)
+        if self.relative_pose:
+            # root point of COCO format
+            roots = 0.5 * (win_3d_poses[:, 11, :] + win_3d_poses[:, 12, :])
+            win_3d_poses = win_3d_poses - roots[:, np.newaxis, :]
+        return win_3d_poses, idx
 
 
 def run_test():
