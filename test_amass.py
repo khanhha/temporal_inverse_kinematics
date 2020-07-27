@@ -18,6 +18,15 @@ def my_run_smpl_inference(data, smplx_models, device, gender: Optional[str]):
     batch_size = smplx_model.batch_size
     frm_poses = data["poses"].astype(np.float32)
     frm_trans = data["trans"].astype(np.float32)
+    org_betas = data["betas"][:10]
+
+    frm_betas = []
+    for _ in range(len(frm_poses)):
+        aug_beta_deta = 0.5 * np.random.rand() * org_betas
+        new_betas = org_betas + aug_beta_deta
+        frm_betas.append(new_betas[np.newaxis, :])
+    frm_betas = np.concatenate(frm_betas, axis=0).astype(np.float32)
+
     n_poses = frm_poses.shape[0]
     n_batch = (n_poses // batch_size) + 1
     bodies = []
@@ -28,24 +37,26 @@ def my_run_smpl_inference(data, smplx_models, device, gender: Optional[str]):
             break
         poses = frm_poses[s:e, :]
         trans = frm_trans[s:e, :]
+        betas = frm_betas[s:e, :]
         org_bsize = poses.shape[0]
-        pad = 0
         # print(f'n batch = {n_batch}. batch from {s} to {e}. cur_batch_size = {org_bsize}')
         if org_bsize < batch_size:
             # padding because smplx_model require fixed batch size
             pad = batch_size - org_bsize
             poses = np.concatenate([poses, np.zeros((pad, poses.shape[1]), dtype=np.float32)], axis=0)
             trans = np.concatenate([trans, np.zeros((pad, trans.shape[1]), dtype=np.float32)], axis=0)
+            betas = np.concatenate([betas, np.zeros((pad, betas.shape[1]), dtype=np.float32)], axis=0)
 
         poses = torch.from_numpy(poses).to(device)
         trans = torch.from_numpy(trans).to(device)
+        betas = torch.from_numpy(betas).to(device)
         root_orient = poses[:, :3]
         pose_body = poses[:, 3:66]
         left_pose_hand = poses[:, 66:66 + 45]
         right_pose_hand = poses[:, 66 + 45:66 + 90]
 
         # print(root_orient.shape, pose_body.shape, left_pose_hand.shape, right_pose_hand.shape, trans.shape)
-        body = smplx_model(global_orient=root_orient, body_pose=pose_body,
+        body = smplx_model(global_orient=None, body_pose=None, betas=betas,
                            left_hand_pose=left_pose_hand, right_hand_pose=right_pose_hand,
                            transl=None)
         bodies.append(body)
@@ -82,7 +93,7 @@ def run_main():
     amass_dir = Path('/media/F/datasets/amass/')
     smpl_x_dir = Path(amass_dir) / 'smplx'
     device = 'cuda'
-    smplx_models = load_smplx_models(smpl_x_dir, device, 9)
+    smplx_models = load_smplx_models(smpl_x_dir, device, 1)
 
     apaths = [ap for ap in (amass_dir / 'motion_data').rglob("*.npz") if
               ap.stem.endswith('_poses')]

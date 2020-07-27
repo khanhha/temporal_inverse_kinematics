@@ -2,6 +2,7 @@ from pathlib import Path
 from typing import List, Optional
 import torch
 import numpy as np
+from pathlib import Path
 import matplotlib.pyplot as plt
 from torch.utils.data import Dataset, DataLoader
 from smplx import create as smplx_create
@@ -105,9 +106,9 @@ def _aug_3d_keypoints(anim_poses_3d, kps_sigmas):
 
 
 class AmassDataset(Dataset):
-    def __init__(self, smplx_models, smplx_gender: Optional[str], amass_paths: List, window_size: int,
-                 keypoint_format: str, device='cuda', add_gaussian_noise=True):
-        self.smplx_gender = smplx_gender
+    def __init__(self, smplx_models, amass_paths: List, window_size: int,
+                 keypoint_format: str, device='cuda', add_gaussian_noise=True, shape_db_path: Path = None,
+                 aug_shape=True, aug_root_orientation=True):
         self.origin_amass_paths = amass_paths
         self.device = device
         self.smplx_models = smplx_models
@@ -115,7 +116,10 @@ class AmassDataset(Dataset):
         self.relative_pose = True
         self.add_gaussian_noise = add_gaussian_noise
         self.kps_noise_sigmas = coco_kps_sigma()
-        self.aug_root_orientation = True
+        self.aug_root_orientation = aug_root_orientation
+        self.aug_shape = aug_shape
+        self.smplx_shape_db = np.load(str(shape_db_path), allow_pickle=True)[
+            "shapes"] if shape_db_path is not None else None
         if keypoint_format == 'coco':
             self.target_kps_mapping = generate_smplx_to_coco_mappings(SMPLX_JOINT_NAMES)
         else:
@@ -193,6 +197,7 @@ class AmassDataset(Dataset):
     def regenerate_data(self, random_seed):
         data_s = []
         rand_stt = np.random.RandomState(seed=random_seed)
+        shape_rand_stt = np.random.RandomState(seed=random_seed)
         for apath in tqdm(self.origin_amass_paths, 'regenerate epoch data'):
             data = np.load(str(apath))
             data = {k: data[k].item() if data[k].dtype == object else data[k] for k, v in data.items()}
@@ -205,8 +210,28 @@ class AmassDataset(Dataset):
                 new_rots = aug_rot * org_rots
                 data["poses"][:, :3] = new_rots.as_rotvec()
 
-                # we don't care about global translation
-            keypoints = run_smpl_inference(data, self.smplx_models, self.device, self.smplx_gender,
+            if self.aug_shape and self.smplx_shape_db is not None:
+                # sample a random shape from the shape database
+                shape_idx = int(shape_rand_stt.randint(0, len(self.smplx_shape_db), 1))
+                beta_gender = self.smplx_shape_db[shape_idx]
+                beta, gender = beta_gender[0], str(beta_gender[1])
+                # for avoiding b'female'. not sure why.
+                if 'female' in gender:
+                    gender = 'female'
+                elif 'male' in gender:
+                    gender = 'male'
+                else:
+                    gender = 'neutral'
+                # apply some variations to the sampled shape
+                aug_beta = beta + 0.4 * np.random.rand() * beta
+                # replace the shape and gender from the motion
+                data["betas"] = aug_beta.astype(np.float32)
+                data["gender"] = gender
+
+            data["betas"] = data["betas"].astype(np.float32)
+
+            # we don't care about global translation
+            keypoints = run_smpl_inference(data, self.smplx_models, self.device,
                                            apply_trans=False,
                                            apply_root_rot=True)
             data["keypoints_3d"] = keypoints
@@ -224,9 +249,8 @@ def run_test():
     amss_paths = amss_paths[:1]
     device = 'cpu'
     smplx_models = load_smplx_models(smplx_dir, device, 9)
-    ds = AmassDataset(smplx_models=smplx_models, smplx_gender='neutral', amass_paths=amss_paths, window_size=9,
-                      keypoint_format='coco',
-                      cache_dir=post_process_dir, reset_cache=True, device=device)
+    ds = AmassDataset(smplx_models=smplx_models, amass_paths=amss_paths, window_size=9,
+                      keypoint_format='coco', device=device)
     print(ds[500])
     dl = DataLoader(ds, batch_size=16)
     for batch in dl:

@@ -170,8 +170,10 @@ class IKModelWrapper(LightningModule):
         if self.hparams.n_train > 0:
             train_paths = train_paths[:self.hparams.n_train]
 
+        shape_path = Path(self.hparams.amass) / 'smplx_shapes.npz'
+        assert shape_path.exists(), f'smplx_shapes.npz is not found under {self.hparams.amass}'
         ds = AmassDataset(smplx_models=self.smplx_models, amass_paths=train_paths, window_size=self.hparams.win_size,
-                          keypoint_format=self.hparams.keypoint_format, smplx_gender='neutral')
+                          keypoint_format=self.hparams.keypoint_format, shape_db_path=shape_path)
         return DataLoader(ds, batch_size=self.hparams.bs, shuffle=True, num_workers=self.hparams.n_workers)
 
     def val_dataloader(self):
@@ -180,7 +182,7 @@ class IKModelWrapper(LightningModule):
             val_paths = val_paths[:self.hparams.n_valid]
 
         ds = AmassDataset(smplx_models=self.smplx_models, amass_paths=val_paths, window_size=self.hparams.win_size,
-                          keypoint_format=self.hparams.keypoint_format, smplx_gender='neutral')
+                          keypoint_format=self.hparams.keypoint_format)
         return [DataLoader(ds, batch_size=self.hparams.bs, shuffle=False, num_workers=self.hparams.n_workers)]
 
     @staticmethod

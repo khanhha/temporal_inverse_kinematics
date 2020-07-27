@@ -18,14 +18,17 @@ def load_smplx_models(smplx_dir, device, batch_size):
     return {'male': male_smplx, 'female': female_smplx, 'neutral': neutral_smplx}
 
 
-def run_smpl_inference(data, smplx_models, device, gender: Optional[str], apply_trans=True, apply_root_rot=True):
-    if gender is None:
-        gender = str(data["gender"])
-    smplx_model = smplx_models["male"] if 'male' in gender else smplx_models["female"]
+def run_smpl_inference(data, smplx_models, device,
+                       apply_trans=True,
+                       apply_root_rot=True,
+                       apply_shape=True):
+    smplx_model = smplx_models[str(data["gender"])]
     batch_size = smplx_model.batch_size
     frm_poses = data["poses"].astype(np.float32)
     frm_trans = data["trans"].astype(np.float32)
     n_poses = frm_poses.shape[0]
+    beta = data["betas"][:10][np.newaxis, :]
+    frm_betas = np.tile(beta, (n_poses, 1))
     frm_joints = []
     n_batch = (n_poses // batch_size) + 1
     for i in range(n_batch):
@@ -35,6 +38,7 @@ def run_smpl_inference(data, smplx_models, device, gender: Optional[str], apply_
             break
         poses = frm_poses[s:e, :]
         trans = frm_trans[s:e, :]
+        betas = frm_betas[s:e, :]
         org_bsize = poses.shape[0]
         pad = 0
         # print(f'n batch = {n_batch}. batch from {s} to {e}. cur_batch_size = {org_bsize}')
@@ -43,16 +47,18 @@ def run_smpl_inference(data, smplx_models, device, gender: Optional[str], apply_
             pad = batch_size - org_bsize
             poses = np.concatenate([poses, np.zeros((pad, poses.shape[1]), dtype=np.float32)], axis=0)
             trans = np.concatenate([trans, np.zeros((pad, trans.shape[1]), dtype=np.float32)], axis=0)
+            betas = np.concatenate([betas, np.zeros((pad, betas.shape[1]), dtype=np.float32)], axis=0)
 
         poses = torch.from_numpy(poses).to(device)
         trans = torch.from_numpy(trans).to(device) if apply_trans else None
+        betas = torch.from_numpy(betas).to(device) if apply_shape else None
         root_orient = poses[:, :3] if apply_root_rot else None
         pose_body = poses[:, 3:66]
         left_pose_hand = poses[:, 66:66 + 45]
         right_pose_hand = poses[:, 66 + 45:66 + 90]
 
         # print(root_orient.shape, pose_body.shape, left_pose_hand.shape, right_pose_hand.shape, trans.shape)
-        body = smplx_model(global_orient=root_orient, body_pose=pose_body,
+        body = smplx_model(global_orient=root_orient, body_pose=pose_body, betas=betas,
                            left_hand_pose=left_pose_hand, right_hand_pose=right_pose_hand,
                            transl=trans)
         joints = body.joints.detach().cpu().numpy()
