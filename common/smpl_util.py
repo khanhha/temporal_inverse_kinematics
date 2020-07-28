@@ -2,6 +2,7 @@ import numpy as np
 import torch
 from smplx import create as smplx_create
 from typing import Optional
+from tqdm import tqdm
 
 
 def load_smplx_models(smplx_dir, device, batch_size):
@@ -21,7 +22,8 @@ def load_smplx_models(smplx_dir, device, batch_size):
 def run_smpl_inference(data, smplx_models, device,
                        apply_trans=True,
                        apply_root_rot=True,
-                       apply_shape=True):
+                       apply_shape=True,
+                       return_mesh=False):
     smplx_model = smplx_models[str(data["gender"])]
     batch_size = smplx_model.batch_size
     frm_poses = data["poses"].astype(np.float32)
@@ -31,7 +33,8 @@ def run_smpl_inference(data, smplx_models, device,
     frm_betas = np.tile(beta, (n_poses, 1)).astype(np.float32)
     frm_joints = []
     n_batch = (n_poses // batch_size) + 1
-    for i in range(n_batch):
+    meshes = []
+    for i in tqdm(range(n_batch), desc=f'run_smpl_inference'):
         s = i * batch_size
         e = (i + 1) * batch_size
         if s >= n_poses:
@@ -65,9 +68,12 @@ def run_smpl_inference(data, smplx_models, device,
         if pad > 0:
             joints = joints[:org_bsize]
         frm_joints.append(joints)
+        if return_mesh:
+            meshes.append(body.vertices.detach().cpu().numpy())
 
     frm_joints = np.concatenate(frm_joints, axis=0)
-
-    return frm_joints
-
-
+    if return_mesh:
+        meshes = np.concatenate(meshes, axis=0)
+        return frm_joints, meshes
+    else:
+        return frm_joints
