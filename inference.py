@@ -7,7 +7,8 @@ from common.smpl_util import load_smplx_models, run_smpl_inference
 from common.mesh_viewer import MeshViewer
 from common.sphere import points_to_spheres
 from common.colors_def import colors
-from common.keypoints_util import generate_smplx_to_coco_mappings, convert_seq_keypoints
+from common.keypoints_util import (generate_smplx_to_coco_mappings, convert_seq_keypoints,
+                                   generate_moveai3d_to_coco_mappings)
 from smplx.joint_names import JOINT_NAMES
 from mmskeleton.datasets.data_amass import InferenceDataset
 import trimesh
@@ -79,6 +80,74 @@ def amass_data_to_3d_keypoints(smplx_models, amass_path, out_kps_format):
     return convert_seq_keypoints(seq_kps, kps_map)
 
 
+def render_seq_poses_meshes(seq_3d_kps, seq_vertices, faces, out_vid_path, imw=1600, imh=1800, step=1, fps=24):
+    mv = MeshViewer(width=imw, height=imh, use_offscreen=True)
+
+    vwriter = get_writer(out_vid_path, fps=fps)
+    n_samples = len(seq_3d_kps)
+    for idx in tqdm(range(0, n_samples, step), desc='rendering'):
+        in_kps = seq_3d_kps[idx]
+        pred_vertices = seq_vertices[idx]
+        joints_mesh = points_to_spheres(in_kps, vc=colors['red'])
+        apply_mesh_tranfsormations_(joints_mesh,
+                                    trimesh.transformations.rotation_matrix(np.radians(-90), (1, 0, 0)))
+
+        mv.set_static_meshes(joints_mesh)
+        img0 = mv.render()
+
+        prd_mesh = trimesh.Trimesh(vertices=pred_vertices, faces=faces,
+                                   vertex_colors=np.tile((150, 150, 150), (10475, 1)))
+        apply_mesh_tranfsormations_([prd_mesh], trimesh.transformations.rotation_matrix(np.radians(-90), (1, 0, 0)))
+
+        mv.set_static_meshes([prd_mesh])
+        img1 = mv.render()
+
+        img = np.concatenate([img0, img1], axis=1)
+        vwriter.append_data(img)
+
+    vwriter.close()
+
+
+def run_test():
+    amass_dir = Path('/media/F/datasets/amass/')
+    smpl_x_dir = Path(amass_dir) / 'smplx'
+    smplx_models = load_smplx_models(smpl_x_dir, 'cuda', 9)
+
+    seq_kps_3d_path = Path(
+        '/media/F/moveai/data/MOX_projects/MOX-009-LOC/contemporary_03/run_2020-07-08-14-17-21-807325_/'
+        'poses_3d/cam01_track00.npz')
+
+    data = np.load(seq_kps_3d_path, allow_pickle=True)
+    seq_3d_kps_mvai = data["joints_3d"]
+    joint_3d_names = data["joint_3d_names"].tolist()
+    kps_mappings = generate_moveai3d_to_coco_mappings(joint_3d_names)
+    seq_3d_kps = convert_seq_keypoints(seq_3d_kps_mvai, kps_mappings)
+    seq_3d_kps[:, 0] = 0.5 * (seq_3d_kps_mvai[:, -1] + seq_3d_kps_mvai[:, -2])
+    seq_3d_kps[:, 1] = seq_3d_kps_mvai[:, -2]  # left eye = left ear
+    seq_3d_kps[:, 2] = seq_3d_kps_mvai[:, -1]  # right eye = right ear
+
+    y = seq_3d_kps[:, :, 1].copy()
+    z = seq_3d_kps[:, :, 2].copy()
+    seq_3d_kps[:, :, 1] = z
+    seq_3d_kps[:, :, 2] = -y
+
+    ckpt_path = Path('/media/F/datasets/amass/ik_model/model_ckps/checkpoint_epoch=98-val_loss=0.02.ckpt')
+    model = IKModelWrapper.load_from_checkpoint(str(ckpt_path))
+    model.eval()
+
+    seq_smpl_poses = run_inference(model, seq_3d_kps)
+    sample_poses = np.zeros((seq_smpl_poses.shape[0], 156), dtype=np.float32)
+    sample_poses[:, :66] = seq_smpl_poses[:, :66]
+    data = {"poses": sample_poses, "gender": "male"}
+    pred_seq_3d_kps, pred_seq_meshes = run_smpl_inference(data, smplx_models, 'cuda',
+                                                          apply_trans=False,
+                                                          apply_shape=False, return_mesh=True)
+
+    faces = smplx_models["male"].faces
+    o_viz_path = f'/media/F/thesis/motion_capture/data/debug/{seq_kps_3d_path.stem}.mp4'
+    render_seq_poses_meshes(seq_3d_kps, pred_seq_meshes, faces, o_viz_path)
+
+
 def run_main():
     ckpt_path = Path('/media/F/datasets/amass/ik_model/model_ckps/checkpoint_epoch=98-val_loss=0.02.ckpt')
     amass_dir = Path('/media/F/datasets/amass/')
@@ -138,4 +207,5 @@ def run_main():
 
 
 if __name__ == "__main__":
-    run_main()
+    # run_main()
+    run_test()

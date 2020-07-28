@@ -27,10 +27,11 @@ def run_smpl_inference(data, smplx_models, device,
     smplx_model = smplx_models[str(data["gender"])]
     batch_size = smplx_model.batch_size
     frm_poses = data["poses"].astype(np.float32)
-    frm_trans = data["trans"].astype(np.float32)
     n_poses = frm_poses.shape[0]
-    beta = data["betas"][:10][np.newaxis, :]
-    frm_betas = np.tile(beta, (n_poses, 1)).astype(np.float32)
+
+    frm_trans = data["trans"].astype(np.float32) if apply_trans else None
+    beta = data["betas"][:10][np.newaxis, :] if apply_shape else None
+    frm_betas = np.tile(beta, (n_poses, 1)).astype(np.float32) if apply_shape else None
     frm_joints = []
     n_batch = (n_poses // batch_size) + 1
     meshes = []
@@ -40,8 +41,8 @@ def run_smpl_inference(data, smplx_models, device,
         if s >= n_poses:
             break
         poses = frm_poses[s:e, :]
-        trans = frm_trans[s:e, :]
-        betas = frm_betas[s:e, :]
+        trans = frm_trans[s:e, :] if apply_trans else None
+        betas = frm_betas[s:e, :] if apply_shape else None
         org_bsize = poses.shape[0]
         pad = 0
         # print(f'n batch = {n_batch}. batch from {s} to {e}. cur_batch_size = {org_bsize}')
@@ -49,8 +50,10 @@ def run_smpl_inference(data, smplx_models, device,
             # padding because smplx_model require fixed batch size
             pad = batch_size - org_bsize
             poses = np.concatenate([poses, np.zeros((pad, poses.shape[1]), dtype=np.float32)], axis=0)
-            trans = np.concatenate([trans, np.zeros((pad, trans.shape[1]), dtype=np.float32)], axis=0)
-            betas = np.concatenate([betas, np.zeros((pad, betas.shape[1]), dtype=np.float32)], axis=0)
+            trans = np.concatenate([trans, np.zeros((pad, trans.shape[1]), dtype=np.float32)],
+                                   axis=0) if apply_trans else None
+            betas = np.concatenate([betas, np.zeros((pad, betas.shape[1]), dtype=np.float32)],
+                                   axis=0) if apply_shape else None
 
         poses = torch.from_numpy(poses).to(device)
         trans = torch.from_numpy(trans).to(device) if apply_trans else None

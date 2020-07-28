@@ -24,6 +24,28 @@ def generate_smplx_to_coco_mappings(smplx_kps_names: List[str]):
     return mappings
 
 
+def generate_moveai3d_to_coco_mappings(mvai_3d_joint_names):
+    mappings = 17 * [0]
+    mappings[0] = -1
+    mappings[1] = -1
+    mappings[2] = -1
+    mappings[3] = mvai_3d_joint_names.index('L_Ear')
+    mappings[4] = mvai_3d_joint_names.index('R_Ear')
+    mappings[5] = mvai_3d_joint_names.index('L_Shoulder')
+    mappings[6] = mvai_3d_joint_names.index('R_Shoulder')
+    mappings[7] = mvai_3d_joint_names.index('L_Elbow')
+    mappings[8] = mvai_3d_joint_names.index('R_Elbow')
+    mappings[9] = mvai_3d_joint_names.index('L_Wrist')
+    mappings[10] = mvai_3d_joint_names.index('R_Wrist')
+    mappings[11] = mvai_3d_joint_names.index('L_Hip')
+    mappings[12] = mvai_3d_joint_names.index('R_Hip')
+    mappings[13] = mvai_3d_joint_names.index('L_Knee')
+    mappings[14] = mvai_3d_joint_names.index('R_Knee')
+    mappings[15] = mvai_3d_joint_names.index('L_Ankle')
+    mappings[16] = mvai_3d_joint_names.index('R_Ankle')
+    return mappings
+
+
 def convert_seq_keypoints(in_seq_kps, mappings, do_copy=False):
     """
     :param in_seq_kps: BxJxC
@@ -33,5 +55,6 @@ def convert_seq_keypoints(in_seq_kps, mappings, do_copy=False):
     n_kps = len(mappings)
     out_kps = np.zeros((in_seq_kps.shape[0], n_kps, in_seq_kps.shape[2]), dtype=np.float32)
     for target_idx, smplx_idx in enumerate(mappings):
-        out_kps[:, target_idx, :] = in_seq_kps[:, smplx_idx, :].copy() if do_copy else in_seq_kps[:, smplx_idx, :]
+        if smplx_idx >= 0:
+            out_kps[:, target_idx, :] = in_seq_kps[:, smplx_idx, :].copy() if do_copy else in_seq_kps[:, smplx_idx, :]
     return out_kps
