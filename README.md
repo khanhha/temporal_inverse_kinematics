@@ -7,8 +7,6 @@ This project presents a human inverse kinemtics solution based on deep learning.
 A graph convolution network is constructed to predict SMPLx joint angles from a tepmoral
 sequence of relative 3d poses in COCO format.
 
-## Sample
-
 ## Install
 ```bash
 conda env create -n motion python=3.8.2
