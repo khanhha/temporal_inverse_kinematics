@@ -13,9 +13,8 @@ from pytorch_lightning.core import LightningModule
 import pytorch_lightning as pl
 from mmskeleton.datasets import AmassDataset
 from pathlib import Path
-from mmskeleton.models import ST_GCN_18
+from mmskeleton.models import StgGcn18, StgLayerConfig, StgConfig
 from common.smpl_util import load_smplx_models
-from common.geometry import rot6d_to_rotmat, rotation_matrix_to_angle_axis
 
 
 def _load_amass_path_list(csv_file):
@@ -49,7 +48,6 @@ class IKLoss(nn.Module):
     def forward(self, outputs, data_3d):
         gt_poses = outputs["poses"]
         pred_poses = data_3d["poses"]
-        # pred_poses = pred_poses.view(pred_poses.shape[0], pred_poses.shape[1], -1, 3)
         pose_loss = self.criterion_pose(gt_poses, pred_poses)
         return pose_loss
 
@@ -62,7 +60,16 @@ class Regressor(nn.Module):
                               max_hop=hparams.max_hop,
                               dilation=hparams.dilation)
 
-        self.backbone = ST_GCN_18(in_channels=hparams.kps_channel, graph_cfg=self.graph_cfg)
+        in_c = hparams.kps_channel
+        # 300 because 300%3 == 0
+        layers = [StgLayerConfig(in_channels=in_c, out_channels=64, temporal_stride=1, is_residual=True),
+                  StgLayerConfig(in_channels=64, out_channels=64, temporal_stride=1, is_residual=True),
+                  StgLayerConfig(in_channels=64, out_channels=128, temporal_stride=1, is_residual=True),
+                  StgLayerConfig(in_channels=128, out_channels=128, temporal_stride=1, is_residual=True),
+                  StgLayerConfig(in_channels=128, out_channels=256, temporal_stride=1, is_residual=True),
+                  StgLayerConfig(in_channels=256, out_channels=256, temporal_stride=1, is_residual=True)]
+        config = StgConfig(layers=layers, temporal_kernel_size=1)
+        self.backbone = StgGcn18(config=config, graph_cfg=self.graph_cfg)
 
         # npose = 22 * 6
         # channel = 512

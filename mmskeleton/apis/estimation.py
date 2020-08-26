@@ -7,7 +7,7 @@ from mmskeleton.datasets.utils.video_demo import VideoDemo
 from mmskeleton.utils import get_mmskeleton_url
 from mmskeleton.processor.apis import init_twodimestimator, inference_twodimestimator
 
-import mmdet.apis
+# import mmdet.apiswar
 
 
 def init_pose_estimator(detection_cfg, estimation_cfg, device=None):

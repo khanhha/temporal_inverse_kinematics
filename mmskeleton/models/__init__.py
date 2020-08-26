@@ -1,1 +1,1 @@
-from .backbones import ST_GCN_18
+from .backbones import StgGcn18, StgLayerConfig, StgConfig

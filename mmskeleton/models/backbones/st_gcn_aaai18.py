@@ -2,8 +2,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
-
 from mmskeleton.ops.st_gcn import ConvTemporalGraphical, Graph
+from dataclasses import dataclass
+from typing import List
 
 
 def zero(x):
@@ -14,7 +15,21 @@ def iden(x):
     return x
 
 
-class ST_GCN_18(nn.Module):
+@dataclass
+class StgLayerConfig:
+    in_channels: int
+    out_channels: int
+    temporal_stride: int
+    is_residual: True
+
+
+@dataclass
+class StgConfig:
+    layers: List[StgLayerConfig]
+    temporal_kernel_size: int
+
+
+class StgGcn18(nn.Module):
     r"""Spatial temporal graph convolutional networks.
 
     Args:
@@ -35,7 +50,7 @@ class ST_GCN_18(nn.Module):
     """
 
     def __init__(self,
-                 in_channels,
+                 config: StgConfig,
                  graph_cfg,
                  edge_importance_weighting=True,
                  data_bn=True,
@@ -53,27 +68,38 @@ class ST_GCN_18(nn.Module):
 
         # build networks
         spatial_kernel_size = A.size(0)
-        temporal_kernel_size = 9
+        temporal_kernel_size = config.temporal_kernel_size
         kernel_size = (temporal_kernel_size, spatial_kernel_size)
+        in_channels = config.layers[0].in_channels
         self.data_bn = nn.BatchNorm1d(in_channels *
                                       A.size(1)) if data_bn else iden
         kwargs0 = {k: v for k, v in kwargs.items() if k != 'dropout'}
-        self.st_gcn_networks = nn.ModuleList((
-            st_gcn_block(in_channels,
-                         64,
-                         kernel_size,
-                         1,
-                         residual=True,
-                         **kwargs0),
-            st_gcn_block(64, 64, kernel_size, 1, **kwargs),
-            st_gcn_block(64, 64, kernel_size, 1, **kwargs),
-            st_gcn_block(64, 64, kernel_size, 1, **kwargs),
-            st_gcn_block(64, 128, kernel_size, 1, **kwargs),
-            st_gcn_block(128, 128, kernel_size, 1, **kwargs),
-            st_gcn_block(128, 128, kernel_size, 1, **kwargs),
-            st_gcn_block(128, 256, kernel_size, 1, **kwargs),
-            st_gcn_block(256, 256, kernel_size, 1, **kwargs),
-        ))
+        # self.st_gcn_networks = nn.ModuleList((
+        #     st_gcn_block(in_channels,
+        #                  64,
+        #                  kernel_size,
+        #                  1,
+        #                  residual=True,
+        #                  **kwargs0),
+        #     st_gcn_block(64, 64, kernel_size, 1, **kwargs),
+        #     st_gcn_block(64, 64, kernel_size, 1, **kwargs),
+        #     st_gcn_block(64, 64, kernel_size, 1, **kwargs),
+        #     st_gcn_block(64, 128, kernel_size, 1, **kwargs),
+        #     st_gcn_block(128, 128, kernel_size, 1, **kwargs),
+        #     st_gcn_block(128, 128, kernel_size, 1, **kwargs),
+        #     st_gcn_block(128, 256, kernel_size, 1, **kwargs),
+        #     st_gcn_block(256, 256, kernel_size, 1, **kwargs),
+        # ))
+        #
+        self.st_gcn_networks = nn.ModuleList([
+            StGcnBlock(in_channels=layer.in_channels,
+                       out_channels=layer.out_channels,
+                       kernel_size=kernel_size,
+                       stride=layer.temporal_stride,
+                       residual=layer.is_residual,
+                       **kwargs0)
+            for layer in config.layers
+        ])
 
         # initialize parameters for edge importance weighting
         if edge_importance_weighting:
@@ -107,7 +133,7 @@ class ST_GCN_18(nn.Module):
         return x
 
 
-class st_gcn_block(nn.Module):
+class StGcnBlock(nn.Module):
     r"""Applies a spatial temporal graph convolution over an input graph sequence.
 
     Args:
