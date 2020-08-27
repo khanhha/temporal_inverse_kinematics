@@ -35,7 +35,7 @@ def run_smpl_inference(data, smplx_models, device,
     frm_joints = []
     n_batch = (n_poses // batch_size) + 1
     meshes = []
-    for i in tqdm(range(n_batch), desc=f'run_smpl_inference'):
+    for i in range(n_batch):
         s = i * batch_size
         e = (i + 1) * batch_size
         if s >= n_poses:

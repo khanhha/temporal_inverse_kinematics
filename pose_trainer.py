@@ -168,7 +168,7 @@ class IKPoseTrainer(LightningModule):
         }
         return val_log
 
-    def on_epotch_end(self):
+    def on_epoch_end(self):
         if self.trainer is not None:
             dl = self.trainer.train_dataloader
             dl.dataset.on_epoch_end(self.current_epoch)
