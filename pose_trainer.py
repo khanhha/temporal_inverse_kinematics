@@ -89,7 +89,7 @@ class PoseRegressor(nn.Module):
         self.pose_regressor = nn.Sequential(nn.Linear(17 * 256, 512),
                                             nn.LeakyReLU(),
                                             nn.Dropout(0.7),
-                                            nn.Linear(1024, self.pose_dim))
+                                            nn.Linear(512, self.pose_dim))
 
     def forward(self, x, init_pose=None, n_iter=3):
         """
@@ -137,8 +137,6 @@ class IKPoseTrainer(LightningModule):
     def __init__(self, hparams):
         super().__init__()
         self.hparams = hparams
-        self.smplx_models = load_smplx_models(Path(self.hparams.amass) / 'smplx',
-                                              device='cuda', batch_size=1024)
         self.regressor = PoseRegressor(self.hparams)
         self.criterion = PoseLosses('cuda')
 
@@ -188,7 +186,8 @@ class IKPoseTrainer(LightningModule):
 
         shape_path = Path(self.hparams.amass) / 'smplx_shapes.npz'
         assert shape_path.exists(), f'smplx_shapes.npz is not found under {self.hparams.amass}'
-        ds = AmassDataset(smplx_models=self.smplx_models, amass_paths=train_paths, window_size=self.hparams.win_size,
+        smplx_models = load_smplx_models(Path(self.hparams.amass) / 'smplx', device='cuda', batch_size=1024)
+        ds = AmassDataset(smplx_models=smplx_models, amass_paths=train_paths, window_size=self.hparams.win_size,
                           keypoint_format=self.hparams.keypoint_format, shape_db_path=shape_path)
         return DataLoader(ds, batch_size=self.hparams.bs, shuffle=True, num_workers=self.hparams.n_workers)
 
@@ -197,7 +196,8 @@ class IKPoseTrainer(LightningModule):
         if self.hparams.n_valid > 0:
             val_paths = val_paths[:self.hparams.n_valid]
 
-        ds = AmassDataset(smplx_models=self.smplx_models, amass_paths=val_paths, window_size=self.hparams.win_size,
+        smplx_models = load_smplx_models(Path(self.hparams.amass) / 'smplx', device='cuda', batch_size=1024)
+        ds = AmassDataset(smplx_models=smplx_models, amass_paths=val_paths, window_size=self.hparams.win_size,
                           keypoint_format=self.hparams.keypoint_format)
         return [DataLoader(ds, batch_size=self.hparams.bs, shuffle=False, num_workers=self.hparams.n_workers)]
 
