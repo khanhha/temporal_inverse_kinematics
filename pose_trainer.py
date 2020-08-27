@@ -76,15 +76,20 @@ class PoseRegressor(nn.Module):
         layers = [StgLayerConfig(in_channels=in_c, out_channels=64, temporal_stride=1, is_residual=True),
                   StgLayerConfig(in_channels=64, out_channels=64, temporal_stride=1, is_residual=True),
                   StgLayerConfig(in_channels=64, out_channels=128, temporal_stride=2, is_residual=True),
+                  StgLayerConfig(in_channels=128, out_channels=128, temporal_stride=1, is_residual=True),
+                  StgLayerConfig(in_channels=128, out_channels=128, temporal_stride=1, is_residual=True),
                   StgLayerConfig(in_channels=128, out_channels=128, temporal_stride=2, is_residual=True),
                   StgLayerConfig(in_channels=128, out_channels=256, temporal_stride=2, is_residual=True),
                   StgLayerConfig(in_channels=256, out_channels=256, temporal_stride=2, is_residual=True)]
+
         config = StgConfig(layers=layers, temporal_kernel_size=3)
         self.backbone = StgGcn18(config=config, graph_cfg=self.graph_cfg)
 
         self.pose_dim = 22 * 3
-        self.betas_dim = 10
-        self.pose_regressor = nn.Linear(17 * 256, self.pose_dim)
+        self.pose_regressor = nn.Sequential(nn.Linear(17 * 256, 512),
+                                            nn.LeakyReLU(),
+                                            nn.Dropout(0.7),
+                                            nn.Linear(1024, self.pose_dim))
 
     def forward(self, x, init_pose=None, n_iter=3):
         """
