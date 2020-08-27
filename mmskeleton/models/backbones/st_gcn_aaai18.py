@@ -129,7 +129,7 @@ class StgGcn18(nn.Module):
             x, _ = gcn(x, self.A * importance)
 
         x = x.permute(0, 2, 3, 1)
-        x = x.contiguous().view(N, T, -1)
+        x = x.contiguous().view(x.size(0), x.size(1), -1)
         return x
 
 

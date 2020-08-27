@@ -39,22 +39,33 @@ def calc_mean_losses(outputs, loss_keys):
     return {key: loss for key, loss in loss_means.items() if loss_cnts[key] > 0}
 
 
-class IKLoss(nn.Module):
+class PoseLosses(nn.Module):
     def __init__(self, device):
-        super(IKLoss, self).__init__()
+        super(PoseLosses, self).__init__()
         self.device = device
-        self.criterion_pose = nn.MSELoss().to(self.device)
+        self.criterion_mse = nn.MSELoss().to(self.device)
 
     def forward(self, outputs, data_3d):
-        gt_poses = outputs["poses"]
-        pred_poses = data_3d["poses"]
-        pose_loss = self.criterion_pose(gt_poses, pred_poses)
+        pose_loss = self.criterion_mse(outputs["poses"], data_3d["poses"])
         return pose_loss
 
 
-class Regressor(nn.Module):
+# npose = 22 * 6
+# channel = 512
+# self.fc1 = nn.Linear(17 * 256 + npose, channel)
+# self.drop1 = nn.Dropout()
+# self.fc2 = nn.Linear(channel, channel)
+# self.drop2 = nn.Dropout()
+# self.decpose = nn.Linear(channel, npose)
+# nn.init.xavier_uniform_(self.decpose.weight, gain=0.01)
+# mean_params = np.load(hparams.smpl_mean)
+# # hack. this is mean SMPL model, not SMPLX. we don't have 6D mean smplx so far.
+# init_pose = torch.from_numpy(mean_params['pose'][:132]).unsqueeze(0)
+# self.register_buffer('init_pose', init_pose)
+
+class PoseRegressor(nn.Module):
     def __init__(self, hparams):
-        super(Regressor, self).__init__()
+        super(PoseRegressor, self).__init__()
         self.graph_cfg = dict(layout=hparams.graph_layout,
                               strategy='uniform',
                               max_hop=hparams.max_hop,
@@ -64,28 +75,16 @@ class Regressor(nn.Module):
         # 300 because 300%3 == 0
         layers = [StgLayerConfig(in_channels=in_c, out_channels=64, temporal_stride=1, is_residual=True),
                   StgLayerConfig(in_channels=64, out_channels=64, temporal_stride=1, is_residual=True),
-                  StgLayerConfig(in_channels=64, out_channels=128, temporal_stride=1, is_residual=True),
-                  StgLayerConfig(in_channels=128, out_channels=128, temporal_stride=1, is_residual=True),
-                  StgLayerConfig(in_channels=128, out_channels=256, temporal_stride=1, is_residual=True),
-                  StgLayerConfig(in_channels=256, out_channels=256, temporal_stride=1, is_residual=True)]
-        config = StgConfig(layers=layers, temporal_kernel_size=1)
+                  StgLayerConfig(in_channels=64, out_channels=128, temporal_stride=2, is_residual=True),
+                  StgLayerConfig(in_channels=128, out_channels=128, temporal_stride=2, is_residual=True),
+                  StgLayerConfig(in_channels=128, out_channels=256, temporal_stride=2, is_residual=True),
+                  StgLayerConfig(in_channels=256, out_channels=256, temporal_stride=2, is_residual=True)]
+        config = StgConfig(layers=layers, temporal_kernel_size=3)
         self.backbone = StgGcn18(config=config, graph_cfg=self.graph_cfg)
 
-        # npose = 22 * 6
-        # channel = 512
-        # self.fc1 = nn.Linear(17 * 256 + npose, channel)
-        # self.drop1 = nn.Dropout()
-        # self.fc2 = nn.Linear(channel, channel)
-        # self.drop2 = nn.Dropout()
-        # self.decpose = nn.Linear(channel, npose)
-        # nn.init.xavier_uniform_(self.decpose.weight, gain=0.01)
-        # mean_params = np.load(hparams.smpl_mean)
-        # # hack. this is mean SMPL model, not SMPLX. we don't have 6D mean smplx so far.
-        # init_pose = torch.from_numpy(mean_params['pose'][:132]).unsqueeze(0)
-        # self.register_buffer('init_pose', init_pose)
-
-        npose = 22 * 3
-        self.pose_regressor = nn.Linear(17 * 256, npose)
+        self.pose_dim = 22 * 3
+        self.betas_dim = 10
+        self.pose_regressor = nn.Linear(17 * 256, self.pose_dim)
 
     def forward(self, x, init_pose=None, n_iter=3):
         """
@@ -121,29 +120,32 @@ class Regressor(nn.Module):
         #     'rotmats': pred_rotmat
         # }
 
-        pred_pose = pred_pose.view(batch_size, w_size, 66)
+        pred_pose = pred_pose.view(batch_size, w_size, self.pose_dim)
+
         output = {
-            'poses': pred_pose
+            'poses': pred_pose,
         }
         return output
 
 
-class IKModelWrapper(LightningModule):
+class IKPoseTrainer(LightningModule):
     def __init__(self, hparams):
         super().__init__()
         self.hparams = hparams
         self.smplx_models = load_smplx_models(Path(self.hparams.amass) / 'smplx',
                                               device='cuda', batch_size=1024)
-        self.regressor = Regressor(self.hparams)
-        self.criterion = IKLoss('cuda')
+        self.regressor = PoseRegressor(self.hparams)
+        self.criterion = PoseLosses('cuda')
 
     def forward(self, keypoints_3d):
         return self.regressor(keypoints_3d)
 
     def training_step(self, batch, batch_idx):
-        poses_3d = batch["keypoints_3d"].cuda()
-        preds = self.forward(poses_3d)
-        pose_mse = self.criterion(preds, {"keypoints_3d": poses_3d, "poses": batch["poses"]})
+        batch["keypoints_3d"] = batch["keypoints_3d"].cuda()
+        batch["poses"] = batch["poses"].cuda()
+        batch["betas"] = batch["betas"].cuda()
+        preds = self.forward(batch["keypoints_3d"])
+        pose_mse = self.criterion(preds, batch)
 
         losses = {"pose_mse": pose_mse}
         loss_log = {f'train/{loss_name}': loss for loss_name, loss in losses.items()}
@@ -151,9 +153,11 @@ class IKModelWrapper(LightningModule):
         return {"loss": pose_mse, 'log': loss_log}
 
     def validation_step(self, batch, batch_idx):
-        poses_3d = batch["keypoints_3d"].cuda()
-        preds = self.forward(poses_3d)
-        lss = self.criterion(preds, {"keypoints_3d": poses_3d, "poses": batch["poses"]})
+        batch["keypoints_3d"] = batch["keypoints_3d"].cuda()
+        batch["poses"] = batch["poses"].cuda()
+        batch["betas"] = batch["betas"].cuda()
+        preds = self.forward(batch["keypoints_3d"])
+        lss = self.criterion(preds, batch)
         return {"val_loss": lss, "pose_mse": lss}
 
     def validation_epoch_end(self, outputs):
@@ -223,7 +227,7 @@ def add_args(parser):
 def run_train():
     parser = argparse.ArgumentParser()
     add_args(parser)
-    parser = IKModelWrapper.add_model_specific_args(parser)
+    parser = IKPoseTrainer.add_model_specific_args(parser)
     parser = pl.Trainer.add_argparse_args(parser)
     hparams = parser.parse_args()
 
@@ -234,7 +238,7 @@ def run_train():
         verbose=True)
 
     print('start new training with new model weights')
-    model = IKModelWrapper(hparams)
+    model = IKPoseTrainer(hparams)
     trainer = pl.Trainer(gpus=1, fast_dev_run=False, num_sanity_val_steps=0, benchmark=False,
                          checkpoint_callback=checkpoint_callback)
     trainer.fit(model)

@@ -150,7 +150,7 @@ class AmassDataset(Dataset):
         poses = sample_window(data["poses"], local_idx, self.half_win_size)
         betas = data["betas"]
         return {"keypoints_3d": keypoints_3d.astype(np.float32),
-                "poses": poses[:, :66].astype(np.float32),
+                "poses": poses[-1, :66].astype(np.float32),
                 "betas": betas.astype(np.float32)}
 
     def count_samples(self):
