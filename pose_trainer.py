@@ -227,6 +227,7 @@ def add_args(parser):
                         default="/media/F/thesis/motion_capture/data/smpl/smpl_mean_params.npz", help='data dir')
     parser.add_argument('--n_train', type=int, default=-1, help='max epoch')
     parser.add_argument('--n_valid', type=int, default=-1, help='max epoch')
+    parser.add_argument('--resume_ckpt', type=str, default='', help='max epoch')
 
 
 def run_train():
@@ -242,10 +243,16 @@ def run_train():
         save_top_k=30,
         verbose=True)
 
-    print('start new training with new model weights')
     model = IKPoseTrainer(hparams)
-    trainer = pl.Trainer(gpus=1, fast_dev_run=False, num_sanity_val_steps=0, benchmark=False,
-                         checkpoint_callback=checkpoint_callback)
+    if hparams.resume_ckpt:
+        print(f'resume from checkpoint: {hparams.resume_ckpt}')
+        trainer = pl.Trainer(gpus=1, fast_dev_run=False, num_sanity_val_steps=0, benchmark=False,
+                             checkpoint_callback=checkpoint_callback,
+                             resume_from_checkpoint=hparams.resume_ckpt)
+    else:
+        print('start new training with new model weights')
+        trainer = pl.Trainer(gpus=1, fast_dev_run=False, num_sanity_val_steps=0, benchmark=False,
+                             checkpoint_callback=checkpoint_callback)
     trainer.fit(model)
 
 
